@@ -4,6 +4,7 @@ use core::ptr;
 
 // each free block is part of a linked list.
 
+#[derive(Clone)]
 pub struct FreeBlockLink {
     link: *mut FreeBlock,
 }
@@ -41,11 +42,11 @@ impl FreeBlockLink {
         unsafe { (*self.link).size }
     }
 
-    pub fn next(&self) -> &FreeBlockLink {
+    pub fn next(&self) -> FreeBlockLink {
         if self.is_end() {
-            self
+            self.clone()
         } else {
-            unsafe { &(*self.link).next }
+            unsafe { (*self.link).next.clone() }
         }
     }
 
@@ -66,6 +67,19 @@ impl fmt::Debug for FreeBlockLink {
 
 
 pub struct FreeBlockIterator {
-    start: *mut FreeBlock,
-    next: *mut FreeBlock,
+    current: FreeBlockLink,
+}
+
+impl Iterator for FreeBlockIterator {
+    type Item = &'static FreeBlock;
+
+    fn next(&mut self) -> Option<&'static FreeBlock> {
+        if self.current.is_end() {
+            None
+        } else {
+            let rv = unsafe { self.current.link.as_ref() };
+            self.current = self.current.next();
+            rv
+        }
+    }
 }
