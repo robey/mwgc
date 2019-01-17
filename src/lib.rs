@@ -1,9 +1,11 @@
 use core::fmt;
-use core::fmt::{Debug, Display};
 use core::mem::size_of;
 
 #[macro_use]
 extern crate static_assertions;
+
+pub mod free_block;
+use self::free_block::{FreeBlock, FREE_BLOCK_SIZE};
 
 /// configurable things:
 /// how many bytes are in each block of memory?
@@ -17,14 +19,9 @@ const BLOCK_SIZE_WORDS: usize = BLOCK_SIZE_BYTES / WORD_SIZE_BYTES;
 // we need to reserve 2 bits per block for tracking.
 const BLOCKS_PER_METADATA_BYTE: usize = 8 / 2;
 
-// each free block is part of a linked list.
-pub struct FreeBlock {
-    next: *mut FreeBlock,
-    size: usize,
-}
 
 // block size must be big enough to hold linking info for the free list.
-const_assert!(block_size; BLOCK_SIZE_BYTES >= size_of::<FreeBlock>());
+const_assert!(block_size; BLOCK_SIZE_BYTES >= FREE_BLOCK_SIZE);
 
 
 // odd that this isn't in the stdlib, but apparently neither is divmod!
@@ -45,7 +42,7 @@ pub struct Heap<'a> {
     metadata: &'a mut [u8],
     blocks: usize,
 
-    free: Option<*mut FreeBlock>,
+    free: *mut FreeBlock,
 }
 
 impl<'a> Heap<'a> {
@@ -62,16 +59,29 @@ impl<'a> Heap<'a> {
         let (pool, metadata) = memory.split_at_mut(memory.len() - metadata_size);
         let blocks = pool_size / BLOCK_SIZE_BYTES;
 
+        let free = pool.as_mut_ptr() as *mut FreeBlock;
+        FreeBlock::init(free, pool_size);
+        let heap = Heap { pool, metadata, blocks, free };
+
+        // all of memory is free.
+
         println!("metadata size={}", metadata_size);
 
-        Heap { pool, metadata, blocks, free: None }
+        heap
+    }
+
+    fn as_free_list(&mut self, offset: usize) -> &mut FreeBlock {
+        let ptr = unsafe { self.pool.as_mut_ptr().offset(offset as isize) as *mut FreeBlock };
+        unsafe { &mut *ptr }
     }
 }
 
 
-impl Display for Heap<'_> {
+impl fmt::Display for Heap<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Heap(pool={}, metadata={:?})", self.blocks, self.metadata.len())
+        write!(f, "Heap(pool={}, metadata={:?}, free=[ ", self.blocks, self.metadata.len())?;
+        FreeBlock::display(self.free, f)?;
+        write!(f, " ])")
     }
 }
 
