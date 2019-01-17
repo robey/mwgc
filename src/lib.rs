@@ -5,7 +5,7 @@ use core::mem::size_of;
 extern crate static_assertions;
 
 pub mod free_block;
-use self::free_block::{FreeBlock, FREE_BLOCK_SIZE};
+use self::free_block::{FreeBlockLink, FREE_BLOCK_SIZE};
 
 /// configurable things:
 /// how many bytes are in each block of memory?
@@ -42,7 +42,7 @@ pub struct Heap<'a> {
     metadata: &'a mut [u8],
     blocks: usize,
 
-    free: *mut FreeBlock,
+    free: FreeBlockLink,
 }
 
 impl<'a> Heap<'a> {
@@ -59,8 +59,8 @@ impl<'a> Heap<'a> {
         let (pool, metadata) = memory.split_at_mut(memory.len() - metadata_size);
         let blocks = pool_size / BLOCK_SIZE_BYTES;
 
-        let free = pool.as_mut_ptr() as *mut FreeBlock;
-        FreeBlock::init(free, pool_size);
+        let mut free = FreeBlockLink::at(pool.as_mut_ptr());
+        free.init(pool_size);
         let heap = Heap { pool, metadata, blocks, free };
 
         // all of memory is free.
@@ -70,18 +70,17 @@ impl<'a> Heap<'a> {
         heap
     }
 
-    fn as_free_list(&mut self, offset: usize) -> &mut FreeBlock {
-        let ptr = unsafe { self.pool.as_mut_ptr().offset(offset as isize) as *mut FreeBlock };
-        unsafe { &mut *ptr }
-    }
+    // fn as_free_list(&mut self, offset: usize) -> &mut FreeBlock {
+    //     let ptr = unsafe { self.pool.as_mut_ptr().offset(offset as isize) as *mut FreeBlock };
+    //     unsafe { &mut *ptr }
+    // }
 }
 
 
 impl fmt::Display for Heap<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Heap(pool={}, metadata={:?}, free=[ ", self.blocks, self.metadata.len())?;
-        FreeBlock::display(self.free, f)?;
-        write!(f, " ])")
+        write!(f, "Heap(pool={:?}, blocks={}x{}, ", self.pool as *const _, self.blocks, BLOCK_SIZE_BYTES)?;
+        write!(f, "metadata={:?}, free=[{:?}])", self.metadata.len(), self.free)
     }
 }
 
@@ -92,6 +91,7 @@ mod tests {
     #[test]
     fn make() {
         let mut data: [u8; 256] = [0; 256];
+        println!("at {:?}", &data as *const _);
         println!("{}", Heap::new(&mut data));
     }
 
