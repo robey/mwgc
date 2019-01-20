@@ -16,19 +16,17 @@ pub struct FreeBlock {
 
 pub const FREE_BLOCK_SIZE: usize = size_of::<FreeBlock>();
 
+// end of the linked list
+pub const END: FreeBlockLink = FreeBlockLink { link: ptr::null_mut() };
+
 impl FreeBlockLink {
     pub fn at<T>(p: *mut T) -> FreeBlockLink {
         FreeBlockLink { link: p as *mut FreeBlock }
     }
 
-    // end of the linked list
-    pub fn end() -> FreeBlockLink {
-        FreeBlockLink { link: ptr::null_mut() }
-    }
-
     pub fn init(&mut self, size: usize) -> &FreeBlockLink {
         unsafe {
-            (*self.link).next = FreeBlockLink::end();
+            (*self.link).next = END;
             (*self.link).size = size;
         }
         self
@@ -42,16 +40,23 @@ impl FreeBlockLink {
         unsafe { (*self.link).size }
     }
 
-    pub fn next(&self) -> FreeBlockLink {
+    pub fn next(&self) -> &'static FreeBlockLink {
         if self.is_end() {
-            self.clone()
+            &END
         } else {
-            unsafe { (*self.link).next.clone() }
+            unsafe { &(*self.link).next }
         }
     }
 
     pub fn link(&mut self, b: FreeBlockLink) {
         self.link = b.link;
+    }
+
+    // split this free block, keeping `amount` in this one, and the remainder in a new linked block.
+    pub fn split(&mut self, amount: usize) {
+        assert!(amount <= self.size());
+        assert!(amount >= FREE_BLOCK_SIZE && self.size() - amount >= FREE_BLOCK_SIZE);
+        // FIXME
     }
 }
 
@@ -67,19 +72,20 @@ impl fmt::Debug for FreeBlockLink {
 
 
 pub struct FreeBlockIterator {
-    current: FreeBlockLink,
+    current: &'static FreeBlockLink,
 }
 
 impl Iterator for FreeBlockIterator {
-    type Item = &'static FreeBlock;
+    type Item = &'static FreeBlockLink;
 
-    fn next(&mut self) -> Option<&'static FreeBlock> {
+    fn next(&mut self) -> Option<&'static FreeBlockLink> {
         if self.current.is_end() {
             None
         } else {
-            let rv = unsafe { self.current.link.as_ref() };
+            let rv = self.current;
+            // let rv = unsafe { self.current.link.as_ref() };
             self.current = self.current.next();
-            rv
+            Some(rv)
         }
     }
 }
