@@ -5,7 +5,7 @@ use core::mem::size_of;
 extern crate static_assertions;
 
 pub mod free_block;
-use self::free_block::{FreeBlockLink, FREE_BLOCK_SIZE};
+use self::free_block::{FreeBlock, FREE_BLOCK_SIZE};
 
 /// configurable things:
 /// how many bytes are in each block of memory?
@@ -42,7 +42,7 @@ pub struct Heap<'a> {
     metadata: &'a mut [u8],
     blocks: usize,
 
-    free: FreeBlockLink,
+    pub free: FreeBlock<'a>,
 }
 
 impl<'a> Heap<'a> {
@@ -59,15 +59,16 @@ impl<'a> Heap<'a> {
         let (pool, metadata) = memory.split_at_mut(memory.len() - metadata_size);
         let blocks = pool_size / BLOCK_SIZE_BYTES;
 
-        let mut free = FreeBlockLink::at(pool.as_mut_ptr());
-        free.init(pool_size);
-        let heap = Heap { pool, metadata, blocks, free };
-
         // all of memory is free.
+        let mut free = FreeBlock::at(pool.as_mut_ptr());
+        free.size = pool_size;
+        free.next = None;
 
-        println!("metadata size={}", metadata_size);
+        Heap { pool, metadata, blocks, free: FreeBlock { size: pool_size, next: Some(free) } }
+    }
 
-        heap
+    pub fn free_list(&self) -> &'a mut FreeBlock<'a> {
+        self.free.next.unwrap().as_mut()
     }
 
     // fn as_free_list(&mut self, offset: usize) -> &mut FreeBlock {
@@ -80,7 +81,9 @@ impl<'a> Heap<'a> {
 impl fmt::Display for Heap<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Heap(pool={:?}, blocks={}x{}, ", self.pool as *const _, self.blocks, BLOCK_SIZE_BYTES)?;
-        write!(f, "metadata={:?}, free=[{:?}])", self.metadata.len(), self.free)
+        write!(f, "metadata={:?}, free={}", self.metadata.len(), self.free.size)?;
+        self.free.next.map(|x| write!(f, ": [{:?}])", x));
+        Ok(())
     }
 }
 
@@ -93,6 +96,10 @@ mod tests {
         let mut data: [u8; 256] = [0; 256];
         println!("at {:?}", &data as *const _);
         println!("{}", Heap::new(&mut data));
+
+        let h = Heap::new(&mut data);
+        h.free_list().split(32);
+        println!("{}", h);
     }
 
     #[test]

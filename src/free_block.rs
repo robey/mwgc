@@ -4,88 +4,62 @@ use core::ptr;
 
 // each free block is part of a linked list.
 
-#[derive(Clone)]
-pub struct FreeBlockLink {
-    link: *mut FreeBlock,
-}
-
-pub struct FreeBlock {
-    next: FreeBlockLink,
-    size: usize,
+pub struct FreeBlock<'a> {
+    pub next: Option<&'a FreeBlock<'a>>,
+    pub size: usize,
 }
 
 pub const FREE_BLOCK_SIZE: usize = size_of::<FreeBlock>();
 
-// end of the linked list
-pub const END: FreeBlockLink = FreeBlockLink { link: ptr::null_mut() };
-
-impl FreeBlockLink {
-    pub fn at<T>(p: *mut T) -> FreeBlockLink {
-        FreeBlockLink { link: p as *mut FreeBlock }
+impl<'a> FreeBlock<'a> {
+    pub fn at<T>(p: *mut T) -> &'a mut FreeBlock<'a> {
+        unsafe { &mut *(p as *mut FreeBlock) }
     }
 
-    pub fn init(&mut self, size: usize) -> &FreeBlockLink {
-        unsafe {
-            (*self.link).next = END;
-            (*self.link).size = size;
-        }
-        self
+    pub fn at_offset<T>(p: *mut T, offset: usize) -> &'a mut FreeBlock<'a> {
+        unsafe { &mut *((p as *mut u8).offset(offset as isize) as *mut FreeBlock) }
     }
 
-    pub fn is_end(&self) -> bool {
-        self.link == ptr::null_mut()
-    }
-
-    pub fn size(&self) -> usize {
-        unsafe { (*self.link).size }
-    }
-
-    pub fn next(&self) -> &'static FreeBlockLink {
-        if self.is_end() {
-            &END
-        } else {
-            unsafe { &(*self.link).next }
-        }
-    }
-
-    pub fn link(&mut self, b: FreeBlockLink) {
-        self.link = b.link;
+    pub fn as_mut(&self) -> &'a mut FreeBlock<'a> {
+        unsafe { &mut *(self as *const FreeBlock as *mut FreeBlock) }
     }
 
     // split this free block, keeping `amount` in this one, and the remainder in a new linked block.
     pub fn split(&mut self, amount: usize) {
-        assert!(amount <= self.size());
-        assert!(amount >= FREE_BLOCK_SIZE && self.size() - amount >= FREE_BLOCK_SIZE);
-        // FIXME
+        assert!(amount <= self.size);
+        assert!(amount >= FREE_BLOCK_SIZE && self.size - amount >= FREE_BLOCK_SIZE);
+        let next = FreeBlock::at_offset(self as *mut _, amount);
+        next.size = self.size - amount;
+        next.next = self.next;
+        self.size = amount;
+        self.next = Some(next);
     }
 }
 
-impl fmt::Debug for FreeBlockLink {
+impl<'a> fmt::Debug for FreeBlock<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self.is_end() { return Ok(()) }
-        write!(f, "{} @ {:?}", self.size(), self.link)?;
-        if self.next().is_end() { return Ok(()) }
-        write!(f, " -> ")?;
-        self.next().fmt(f)
+        write!(f, "{} @ {:?}", self.size, self as *const _)?;
+        match self.next {
+            None => Ok(()),
+            Some(next) => {
+                write!(f, " -> ")?;
+                next.fmt(f)
+            }
+        }
     }
 }
 
 
-pub struct FreeBlockIterator {
-    current: &'static FreeBlockLink,
+pub struct FreeBlockIterator<'a> {
+    current: Option<&'a FreeBlock<'a>>,
 }
 
-impl Iterator for FreeBlockIterator {
-    type Item = &'static FreeBlockLink;
+impl<'a> Iterator for FreeBlockIterator<'a> {
+    type Item = &'a FreeBlock<'a>;
 
-    fn next(&mut self) -> Option<&'static FreeBlockLink> {
-        if self.current.is_end() {
-            None
-        } else {
-            let rv = self.current;
-            // let rv = unsafe { self.current.link.as_ref() };
-            self.current = self.current.next();
-            Some(rv)
-        }
+    fn next(&mut self) -> Option<Self::Item> {
+        let rv = self.current;
+        rv.map(|x| self.current = x.next);
+        rv
     }
 }
