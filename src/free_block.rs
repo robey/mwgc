@@ -1,26 +1,24 @@
 use core::fmt;
 use core::mem::size_of;
-use core::ptr;
 
 // each free block is part of a linked list.
 
-pub struct FreeBlock<'a> {
-    pub next: Option<&'a FreeBlock<'a>>,
+pub type FreeBlockRef = &'static FreeBlock;
+
+pub struct FreeBlock {
+    pub next: Option<FreeBlockRef>,
     pub size: usize,
 }
 
 pub const FREE_BLOCK_SIZE: usize = size_of::<FreeBlock>();
 
-impl<'a> FreeBlock<'a> {
-    pub fn at<T>(p: *mut T) -> &'a mut FreeBlock<'a> {
-        unsafe { &mut *(p as *mut FreeBlock) }
+
+impl FreeBlock {
+    pub fn at<T>(p: *const T, offset: usize) -> FreeBlockRef {
+        unsafe { &*((p as *const u8).offset(offset as isize) as *const FreeBlock) }
     }
 
-    pub fn at_offset<T>(p: *mut T, offset: usize) -> &'a mut FreeBlock<'a> {
-        unsafe { &mut *((p as *mut u8).offset(offset as isize) as *mut FreeBlock) }
-    }
-
-    pub fn as_mut(&self) -> &'a mut FreeBlock<'a> {
+    pub fn as_mut(&self) -> &'static mut FreeBlock {
         unsafe { &mut *(self as *const FreeBlock as *mut FreeBlock) }
     }
 
@@ -28,7 +26,7 @@ impl<'a> FreeBlock<'a> {
     pub fn split(&mut self, amount: usize) {
         assert!(amount <= self.size);
         assert!(amount >= FREE_BLOCK_SIZE && self.size - amount >= FREE_BLOCK_SIZE);
-        let next = FreeBlock::at_offset(self as *mut _, amount);
+        let mut next = FreeBlock::at(self, amount).as_mut();
         next.size = self.size - amount;
         next.next = self.next;
         self.size = amount;
@@ -36,30 +34,47 @@ impl<'a> FreeBlock<'a> {
     }
 }
 
-impl<'a> fmt::Debug for FreeBlock<'a> {
+impl fmt::Debug for FreeBlock {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} @ {:?}", self.size, self as *const _)?;
-        match self.next {
-            None => Ok(()),
-            Some(next) => {
-                write!(f, " -> ")?;
-                next.fmt(f)
-            }
-        }
+        write!(f, "{} @ {:?}", self.size, self as *const _)
     }
 }
 
 
-pub struct FreeBlockIterator<'a> {
-    current: Option<&'a FreeBlock<'a>>,
+pub struct FreeListIterator {
+    current: Option<FreeBlockRef>,
 }
 
-impl<'a> Iterator for FreeBlockIterator<'a> {
-    type Item = &'a FreeBlock<'a>;
+impl Iterator for FreeListIterator {
+    type Item = FreeBlockRef;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rv = self.current;
         rv.map(|x| self.current = x.next);
         rv
+    }
+}
+
+
+pub struct FreeList {
+    pub list: FreeBlockRef,
+}
+
+impl FreeList {
+    pub fn new(location: *const u8, size: usize) -> FreeList {
+        let mut block = FreeBlock::at(location, 0).as_mut();
+        block.size = size;
+        block.next = None;
+        FreeList { list: block }
+    }
+
+    pub fn iter(&self) -> FreeListIterator {
+        FreeListIterator { current: Some(self.list) }
+    }
+}
+
+impl fmt::Debug for FreeList {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.iter().map(|block| format!("{:?}", block)).collect::<Vec<String>>().join(" -> "))
     }
 }

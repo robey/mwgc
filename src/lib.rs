@@ -5,7 +5,7 @@ use core::mem::size_of;
 extern crate static_assertions;
 
 pub mod free_block;
-use self::free_block::{FreeBlock, FREE_BLOCK_SIZE};
+use self::free_block::{FreeBlock, FreeBlockRef, FreeList, FREE_BLOCK_SIZE};
 
 /// configurable things:
 /// how many bytes are in each block of memory?
@@ -37,53 +37,36 @@ fn floor_to(n: usize, chunk: usize) -> usize {
 
 
 #[derive(Debug)]
-pub struct Heap<'a> {
-    pool: &'a mut [u8],
-    metadata: &'a mut [u8],
+pub struct Heap {
+    pool: &'static [u8],
+    metadata: &'static [u8],
     blocks: usize,
 
-    pub free: FreeBlock<'a>,
+    pub free: FreeList,
 }
 
-impl<'a> Heap<'a> {
-    // pub fn from_data<T>(data: &mut T) -> Heap {
-    //     Heap::new(data as *mut T as *mut usize, size_of::<T>() / WORD_SIZE_BYTES)
-    // }
-
-    pub fn new(memory: &'a mut [u8]) -> Heap<'a> {
+impl Heap {
+    pub fn new(memory: &'static mut [u8]) -> Heap {
         // total heap = pool + metadata, and pool is just metadata * blocks_per_metadata * block_size
         // so metadata size = heap size / (1 + bpm * bs)
         let divisor = 1 + BLOCKS_PER_METADATA_BYTE * BLOCK_SIZE_BYTES;
         let metadata_size = div_ceil(memory.len(), divisor);
         let pool_size = floor_to(memory.len() - metadata_size, BLOCK_SIZE_BYTES);
-        let (pool, metadata) = memory.split_at_mut(memory.len() - metadata_size);
+        let (pool, metadata) = memory.split_at(memory.len() - metadata_size);
         let blocks = pool_size / BLOCK_SIZE_BYTES;
 
         // all of memory is free.
-        let mut free = FreeBlock::at(pool.as_mut_ptr());
-        free.size = pool_size;
-        free.next = None;
-
-        Heap { pool, metadata, blocks, free: FreeBlock { size: pool_size, next: Some(free) } }
+        Heap { pool, metadata, blocks, free: FreeList::new(pool.as_ptr(), pool_size) }
     }
-
-    pub fn free_list(&self) -> &'a mut FreeBlock<'a> {
-        self.free.next.unwrap().as_mut()
-    }
-
-    // fn as_free_list(&mut self, offset: usize) -> &mut FreeBlock {
-    //     let ptr = unsafe { self.pool.as_mut_ptr().offset(offset as isize) as *mut FreeBlock };
-    //     unsafe { &mut *ptr }
-    // }
 }
 
 
-impl fmt::Display for Heap<'_> {
+impl fmt::Display for Heap {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Heap(pool={:?}, blocks={}x{}, ", self.pool as *const _, self.blocks, BLOCK_SIZE_BYTES)?;
-        write!(f, "metadata={:?}, free={}", self.metadata.len(), self.free.size)?;
-        self.free.next.map(|x| write!(f, ": [{:?}])", x));
-        Ok(())
+        write!(f,
+            "Heap(pool={:?}, blocks={}x{}, metadata={:?}, free=[{:?}])",
+            self.pool as *const _, self.blocks, BLOCK_SIZE_BYTES, self.metadata.len(), self.free
+        )
     }
 }
 
@@ -91,14 +74,15 @@ impl fmt::Display for Heap<'_> {
 mod tests {
     use crate::Heap;
 
+    static mut DATA256: [u8; 256] = [0; 256];
+
     #[test]
     fn make() {
-        let mut data: [u8; 256] = [0; 256];
-        println!("at {:?}", &data as *const _);
-        println!("{}", Heap::new(&mut data));
+        println!("at {:?}", unsafe { &DATA256 as *const _ });
+        println!("{}", Heap::new(unsafe { &mut DATA256 }));
 
-        let h = Heap::new(&mut data);
-        h.free_list().split(32);
+        let h = Heap::new(unsafe { &mut DATA256 });
+        h.free.list.as_mut().split(32);
         println!("{}", h);
     }
 
