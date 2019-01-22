@@ -5,7 +5,7 @@ use core::mem::size_of;
 extern crate static_assertions;
 
 pub mod free_block;
-use self::free_block::{FreeBlock, FreeBlockRef, FreeList, FREE_BLOCK_SIZE};
+use self::free_block::{FreeBlock, FreeBlockPtr, FreeList, FREE_BLOCK_SIZE};
 
 /// configurable things:
 /// how many bytes are in each block of memory?
@@ -82,8 +82,21 @@ mod tests {
         println!("{}", Heap::new(unsafe { &mut DATA256 }));
 
         let h = Heap::new(unsafe { &mut DATA256 });
-        h.free.list.as_mut().split(32);
+        h.free.list.block_mut().split(32);
         println!("{}", h);
+    }
+
+    #[test]
+    fn allocate() {
+        let mut h = Heap::new(unsafe { &mut DATA256 });
+        let first_addr = h.free.first_available();
+        assert_eq!(first_addr, unsafe { &DATA256 as *const u8 });
+        let alloc = h.free.allocate(120);
+        assert!(alloc.is_some());
+        if let Some(memory) = alloc {
+            assert_eq!(first_addr, memory.as_ptr());
+            assert_eq!(memory.len(), 120);
+        }
     }
 
     #[test]
