@@ -5,8 +5,8 @@ use core::slice;
 #[macro_use]
 extern crate static_assertions;
 
-pub mod free_block;
-use self::free_block::{FreeBlock, FreeBlockPtr, FreeList, FREE_BLOCK_SIZE};
+pub mod free_list;
+use self::free_list::{FreeBlock, FreeBlockPtr, FreeList, FREE_BLOCK_SIZE};
 
 /// configurable things:
 /// how many bytes are in each block of memory?
