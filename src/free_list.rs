@@ -9,7 +9,7 @@ pub struct FreeBlockPtr {
     pub ptr: *const FreeBlock,
 }
 
-const END: FreeBlockPtr = FreeBlockPtr {  ptr: 0 as *const FreeBlock };
+const END: FreeBlockPtr = FreeBlockPtr { ptr: 0 as *const FreeBlock };
 
 impl FreeBlockPtr {
     pub fn at<T>(p: *const T, offset: isize) -> FreeBlockPtr {
@@ -17,9 +17,15 @@ impl FreeBlockPtr {
         FreeBlockPtr { ptr }
     }
 
-    pub fn create<T>(p: *const T, offset: isize, next: FreeBlockPtr, size: usize) -> FreeBlockPtr {
+    pub fn create_at<T>(p: *const T, offset: isize, next: *const FreeBlock, size: usize) -> FreeBlockPtr {
         let ptr = FreeBlockPtr::at(p, offset);
         ptr.block_mut().set(next, size);
+        ptr
+    }
+
+    pub fn create(memory: &'static [u8], next: *const FreeBlock) -> FreeBlockPtr {
+        let ptr = FreeBlockPtr::at(memory.as_ptr(), 0);
+        ptr.block_mut().set(next, memory.len());
         ptr
     }
 
@@ -29,6 +35,39 @@ impl FreeBlockPtr {
 
     pub fn block_mut(&self) -> &'static mut FreeBlock {
         unsafe { &mut *(self.ptr as *mut FreeBlock) }
+    }
+
+    // returns true if it actually inserted. returns false if inserting here
+    // would break the ordering.
+    pub fn try_insert(&mut self, memory: &'static [u8]) -> bool {
+        let block = self.block_mut();
+
+        // if this is the end, append.
+        if *self == END {
+            self.ptr = FreeBlockPtr::create(memory, END.ptr).ptr;
+            return true;
+        }
+
+        // insert before the current block.
+        if block.start() > memory.as_ptr() {
+            self.ptr = FreeBlockPtr::create(memory, self.ptr).ptr;
+            self.block_mut().check_merge_next();
+            return true;
+        }
+
+        // merge to the end of this block.
+        if block.merge(memory) {
+            block.check_merge_next();
+            return true;
+        }
+
+        // if this block points to the end, append.
+        if block.next == END {
+            block.next = FreeBlockPtr::create(memory, END.ptr);
+            return true;
+        }
+
+        false
     }
 }
 
@@ -47,8 +86,8 @@ pub struct FreeBlock {
 pub const FREE_BLOCK_SIZE: usize = size_of::<FreeBlock>();
 
 impl FreeBlock {
-    pub fn set(&mut self, next: FreeBlockPtr, size: usize) {
-        self.next = next;
+    pub fn set(&mut self, next: *const FreeBlock, size: usize) {
+        self.next.ptr = next;
         self.size = size;
     }
 
@@ -80,7 +119,7 @@ impl FreeBlock {
         let memory = unsafe { slice::from_raw_parts(self as *const FreeBlock as *const u8, amount) };
         // if there isn't enough left in this block for a new block, just use it all.
         if self.size - amount < FREE_BLOCK_SIZE { return Some((memory, self.next)) }
-        let next = FreeBlockPtr::create(self, amount as isize, self.next, self.size - amount);
+        let next = FreeBlockPtr::create_at(self, amount as isize, self.next.ptr, self.size - amount);
         Some((memory, next))
     }
 
@@ -150,7 +189,7 @@ pub struct FreeList {
 
 impl FreeList {
     pub fn new(memory: &'static [u8]) -> FreeList {
-        FreeList { list: FreeBlockPtr::create(memory.as_ptr(), 0, END, memory.len()) }
+        FreeList { list: FreeBlockPtr::create(memory, END.ptr) }
     }
 
     // for tests:
@@ -187,25 +226,8 @@ impl FreeList {
     }
 
     pub fn retire(&mut self, memory: &'static [u8]) {
-        let memory_ptr = memory.as_ptr();
         for ptr in self.iter_mut() {
-            let block = ptr.block_mut();
-            if block.merge(memory) {
-                // merged into the end of an existing block
-                block.check_merge_next();
-                return;
-            } else if block.start() > memory_ptr {
-                // insert
-                let new_block = FreeBlockPtr::create(memory.as_ptr(), 0, *ptr, memory.len());
-                ptr.ptr = new_block.ptr;
-                new_block.block_mut().check_merge_next();
-                return;
-            } else if block.next == END {
-                // reached the end!
-                let new_block = FreeBlockPtr::create(memory.as_ptr(), 0, END, memory.len());
-                block.next = new_block;
-                return;
-            }
+            if ptr.try_insert(memory) { return }
         }
     }
 }
