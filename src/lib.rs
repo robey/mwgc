@@ -1,5 +1,6 @@
 use core::fmt;
 use core::mem::size_of;
+use core::slice;
 
 #[macro_use]
 extern crate static_assertions;
@@ -52,11 +53,12 @@ impl Heap {
         let divisor = 1 + BLOCKS_PER_METADATA_BYTE * BLOCK_SIZE_BYTES;
         let metadata_size = div_ceil(memory.len(), divisor);
         let pool_size = floor_to(memory.len() - metadata_size, BLOCK_SIZE_BYTES);
-        let (pool, metadata) = memory.split_at(memory.len() - metadata_size);
+        let (pooldata, metadata) = memory.split_at(memory.len() - metadata_size);
         let blocks = pool_size / BLOCK_SIZE_BYTES;
 
         // all of memory is free.
-        Heap { pool, metadata, blocks, free: FreeList::new(pool.as_ptr(), pool_size) }
+        let pool = unsafe { slice::from_raw_parts(pooldata.as_ptr(), pool_size) };
+        Heap { pool, metadata, blocks, free: FreeList::new(pool) }
     }
 }
 
@@ -84,19 +86,6 @@ mod tests {
         let h = Heap::new(unsafe { &mut DATA256 });
         h.free.list.block_mut().split(32);
         println!("{}", h);
-    }
-
-    #[test]
-    fn allocate() {
-        let mut h = Heap::new(unsafe { &mut DATA256 });
-        let first_addr = h.free.first_available();
-        assert_eq!(first_addr, unsafe { &DATA256 as *const u8 });
-        let alloc = h.free.allocate(120);
-        assert!(alloc.is_some());
-        if let Some(memory) = alloc {
-            assert_eq!(first_addr, memory.as_ptr());
-            assert_eq!(memory.len(), 120);
-        }
     }
 
     #[test]
