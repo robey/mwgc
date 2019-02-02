@@ -1,21 +1,24 @@
 use core::fmt;
-use core::mem::size_of;
+// use core::mem::size_of;
 use core::slice;
 
 #[macro_use]
 extern crate static_assertions;
 
+pub mod block_colors;
 pub mod free_list;
-use self::free_list::{FreeBlock, FreeBlockPtr, FreeList, FREE_BLOCK_SIZE};
+
+pub use self::block_colors::{BlockRange, Color, ColorMap};
+pub use self::free_list::{FreeList, FREE_BLOCK_SIZE};
 
 /// configurable things:
 /// how many bytes are in each block of memory?
 const BLOCK_SIZE_BYTES: usize = 16;
 
-const WORD_SIZE_BYTES: usize = size_of::<usize>();
-const WORD_SIZE_BITS: usize = WORD_SIZE_BYTES * 8;
+// const WORD_SIZE_BYTES: usize = size_of::<usize>();
+// const WORD_SIZE_BITS: usize = WORD_SIZE_BYTES * 8;
 
-const BLOCK_SIZE_WORDS: usize = BLOCK_SIZE_BYTES / WORD_SIZE_BYTES;
+// const BLOCK_SIZE_WORDS: usize = BLOCK_SIZE_BYTES / WORD_SIZE_BYTES;
 
 // we need to reserve 2 bits per block for tracking.
 const BLOCKS_PER_METADATA_BYTE: usize = 8 / 2;
