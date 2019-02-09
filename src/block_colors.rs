@@ -2,6 +2,9 @@ use core::fmt;
 use core::mem;
 use core::slice;
 
+// we need to reserve 2 bits per block for tracking.
+pub const BLOCKS_PER_COLORMAP_BYTE: usize = 8 / 2;
+
 #[repr(u8)]
 #[derive(Debug, PartialEq)]
 pub enum Color {
@@ -77,6 +80,7 @@ impl ColorMap {
 
 impl fmt::Debug for ColorMap {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ColorMap(")?;
         for i in 0..(self.bits.len() * 4) {
             write!(f, "{}", match self.get(i) {
                 Color::Blue => "B",
@@ -85,7 +89,7 @@ impl fmt::Debug for ColorMap {
                 Color::Continue => ".",
             })?;
         }
-        Ok(())
+        write!(f, ")")
     }
 }
 
@@ -98,7 +102,7 @@ mod tests {
     fn init() {
         let mut data: [u8; 4] = [0; 4];
         let map = ColorMap::from_raw(&mut data, 4);
-        assert_eq!(format!("{:?}", map), "................");
+        assert_eq!(format!("{:?}", map), "ColorMap(................)");
     }
 
     #[test]
@@ -106,13 +110,13 @@ mod tests {
         let mut data: [u8; 4] = [0; 4];
         let mut map = ColorMap::from_raw(&mut data, 4);
         map.set_range(BlockRange { start: 0, end: 2, color: Color::Green });
-        assert_eq!(format!("{:?}", map), "G...............");
+        assert_eq!(format!("{:?}", map), "ColorMap(G...............)");
         assert_eq!(map.get_range(0, 2), BlockRange { start: 0, end: 2, color: Color::Green });
 
         map.set_range(BlockRange { start: 2, end: 3, color: Color::Blue });
         assert_eq!(map.get_range(2, 3), BlockRange { start: 2, end: 3, color: Color::Blue });
         assert_eq!(map.get_range(0, 3), BlockRange { start: 0, end: 2, color: Color::Green });
         assert_eq!(map.get_range(0, 10), BlockRange { start: 0, end: 2, color: Color::Green });
-        assert_eq!(format!("{:?}", map), "G.B.............");
+        assert_eq!(format!("{:?}", map), "ColorMap(G.B.............)");
     }
 }

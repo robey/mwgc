@@ -234,10 +234,11 @@ impl FreeList {
 
 impl fmt::Debug for FreeList {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.iter().map(|block| format!("{:?}", block)).collect::<Vec<String>>().join(" -> "))
+        write!(f, "FreeList({})", self.iter().map(|block| {
+            format!("{:?}", block)
+        }).collect::<Vec<String>>().join(" -> "))
     }
 }
-
 
 
 #[cfg(test)]
