@@ -90,19 +90,19 @@ pub struct Heap {
 
 impl Heap {
     pub fn new(memory: &'static mut [u8]) -> Heap {
-        // total heap = pool + metadata, and pool is just metadata * blocks_per_metadata * block_size
-        // so metadata size = heap size / (1 + bpm * bs)
+        // total heap = pool + color_map, and pool is just color_map_size * blocks_per_colormap_byte * block_size
+        // so color_map_size = heap size / (1 + bpm * bs)
         let divisor = 1 + BLOCKS_PER_COLORMAP_BYTE * BLOCK_SIZE_BYTES;
-        let metadata_size = div_ceil(memory.len(), divisor);
-        let pool_size = floor_to(memory.len() - metadata_size, BLOCK_SIZE_BYTES);
-        let (pooldata, metadata) = memory.split_at_mut(memory.len() - metadata_size);
+        let color_map_size = div_ceil(memory.len(), divisor);
+        let pool_size = floor_to(memory.len() - color_map_size, BLOCK_SIZE_BYTES);
+        let (pool_data, color_data) = memory.split_at_mut(memory.len() - color_map_size);
         let blocks = pool_size / BLOCK_SIZE_BYTES;
 
         // all of memory is free.
-        let pool = unsafe { slice::from_raw_parts(pooldata.as_ptr(), pool_size) };
+        let pool = unsafe { slice::from_raw_parts_mut(pool_data.as_mut_ptr(), pool_size) };
         Heap {
             pool,
-            color_map: ColorMap::new(metadata),
+            color_map: ColorMap::new(color_data),
             blocks,
             current_color: Color::Blue,
             free_list: FreeList::new(pool)
