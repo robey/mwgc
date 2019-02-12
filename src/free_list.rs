@@ -6,7 +6,7 @@ use core::slice;
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct FreeBlockPtr {
-    pub ptr: *const FreeBlock,
+    ptr: *const FreeBlock,
 }
 
 const END: FreeBlockPtr = FreeBlockPtr { ptr: 0 as *const FreeBlock };
@@ -35,6 +35,11 @@ impl FreeBlockPtr {
 
     pub fn block_mut(&self) -> &'static mut FreeBlock {
         unsafe { &mut *(self.ptr as *mut FreeBlock) }
+    }
+
+    pub fn next(&self) -> Option<FreeBlockPtr> {
+        let next_ptr = self.block().next;
+        if next_ptr == END { None } else { Some(next_ptr) }
     }
 
     // returns true if it actually inserted. returns false if inserting here
@@ -79,8 +84,8 @@ impl fmt::Debug for FreeBlockPtr {
 
 
 pub struct FreeBlock {
-    pub next: FreeBlockPtr,
-    pub size: usize,
+    next: FreeBlockPtr,
+    size: usize,
 }
 
 pub const FREE_BLOCK_SIZE: usize = size_of::<FreeBlock>();
@@ -184,7 +189,7 @@ impl Iterator for FreeListMutableIterator {
 
 
 pub struct FreeList {
-    pub list: FreeBlockPtr,
+    list: FreeBlockPtr,
 }
 
 impl FreeList {
@@ -203,6 +208,10 @@ impl FreeList {
 
     pub fn iter_mut(&mut self) -> FreeListMutableIterator {
         FreeListMutableIterator { current: &mut self.list as *mut FreeBlockPtr }
+    }
+
+    pub fn first(&self) -> Option<FreeBlockPtr> {
+        if self.list == END { None } else { Some(self.list) }
     }
 
     // for tests:
