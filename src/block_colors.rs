@@ -6,7 +6,7 @@ use core::slice;
 pub const BLOCKS_PER_COLORMAP_BYTE: usize = 8 / 2;
 
 #[repr(u8)]
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Color {
     Continue = 0b00,
     Blue = 0b01,
@@ -25,9 +25,9 @@ impl Color {
 // units are block numbers, starting from 0
 #[derive(Debug, PartialEq)]
 pub struct BlockRange {
-    start: usize,
-    end: usize,
-    color: Color
+    pub start: usize,
+    pub end: usize,
+    pub color: Color,
 }
 
 
@@ -64,7 +64,7 @@ impl ColorMap {
         self.bits[n / 4] = (self.bits[n / 4] & mask) | replace;
     }
 
-    pub fn get_range(&mut self, n: usize, max: usize) -> BlockRange {
+    pub fn get_range(&self, n: usize, max: usize) -> BlockRange {
         let color = self.get(n);
         let mut end = n + 1;
         while end < max && self.get(end) == Color::Continue { end += 1 }
