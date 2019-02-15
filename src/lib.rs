@@ -80,7 +80,8 @@ impl fmt::Debug for HeapSpan {
 
 
 pub struct Heap {
-    pool: &'static [u8],
+    pub start: *const u8,
+    pub end: *const u8,
     color_map: ColorMap,
     blocks: usize,
     pub current_color: Color,
@@ -101,7 +102,8 @@ impl Heap {
         // all of memory is free.
         let pool = unsafe { slice::from_raw_parts_mut(pool_data.as_mut_ptr(), pool_size) };
         Heap {
-            pool,
+            start: pool_data.as_ptr(),
+            end: unsafe { pool_data.as_ptr().offset(pool_size as isize) },
             color_map: ColorMap::new(color_data),
             blocks,
             current_color: Color::Blue,
@@ -116,12 +118,12 @@ impl Heap {
 
     #[inline]
     fn address_of(&self, block: usize) -> *const u8 {
-        ((self.pool.as_ptr() as usize) + block * BLOCK_SIZE_BYTES) as *const u8
+        ((self.start as usize) + block * BLOCK_SIZE_BYTES) as *const u8
     }
 
     #[inline]
     fn block_of(&self, p: *const u8) -> usize {
-        ((p as usize) - (self.pool.as_ptr() as usize)) / BLOCK_SIZE_BYTES
+        ((p as usize) - (self.start as usize)) / BLOCK_SIZE_BYTES
     }
 
     #[inline]
@@ -129,16 +131,6 @@ impl Heap {
         let start = self.block_of(memory.as_ptr());
         let end = start + memory.len() / BLOCK_SIZE_BYTES;
         BlockRange { start, end, color }
-    }
-
-    #[inline]
-    fn start(&self) -> *const u8 {
-        self.pool.as_ptr()
-    }
-
-    #[inline]
-    fn end(&self) -> *const u8 {
-        self.address_of(self.blocks)
     }
 
     fn get_range(&self, p: *const u8, max: *const u8) -> BlockRange {
@@ -155,7 +147,7 @@ impl Heap {
     }
 
     pub fn iter(&self) -> HeapIterator {
-        HeapIterator { heap: self, next_free: self.free_list.first(), current: self.start() }
+        HeapIterator { heap: self, next_free: self.free_list.first(), current: self.start }
     }
 
     pub fn dump(&self) -> String {
@@ -165,7 +157,7 @@ impl Heap {
 
 impl fmt::Debug for Heap {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Heap(pool={:?}, blocks={}x{}, ", self.pool as *const _, self.blocks, BLOCK_SIZE_BYTES)?;
+        write!(f, "Heap(pool={:?}, blocks={}x{}, ", self.start, self.blocks, BLOCK_SIZE_BYTES)?;
         if f.alternate() {
             write!(f, "{}", self.dump())?;
         } else {
@@ -190,7 +182,7 @@ impl<'a> Iterator for HeapIterator<'a> {
     // otherwise, use the block map, but don't let it follow a chain past
     // the next free span.
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current >= self.heap.end() { return None }
+        if self.current >= self.heap.end { return None }
 
         if let Some(free) = self.next_free {
             if free.block().start() == self.current {
@@ -200,7 +192,7 @@ impl<'a> Iterator for HeapIterator<'a> {
             }
         }
 
-        let limit = self.next_free.map(|p| p.block() as *const FreeBlock as *const u8).unwrap_or(self.heap.end());
+        let limit = self.next_free.map(|p| p.block() as *const FreeBlock as *const u8).unwrap_or(self.heap.end);
         let span = self.heap.get_range(self.current, limit);
         self.current = self.heap.address_of(span.end);
         Some(HeapSpan::from_block_range(self.heap, span))
@@ -216,8 +208,8 @@ mod tests {
     fn new_heap() {
         let mut data: [u8; 256] = [0; 256];
         let h = Heap::from_raw(&mut data);
-        assert_eq!(h.start(), &data[0] as *const u8);
-        assert_eq!(h.end(), unsafe { h.start().offset(240) });
+        assert_eq!(h.start, &data[0] as *const u8);
+        assert_eq!(h.end, unsafe { h.start.offset(240) });
         assert_eq!(h.dump(), "FREE[240]");
     }
 
