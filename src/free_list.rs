@@ -1,188 +1,197 @@
 use core::fmt;
-use core::mem::size_of;
+use core::mem::{size_of, swap};
 use core::slice;
 
 // each free block is part of a linked list.
 
-#[derive(Clone, Copy, PartialEq)]
-pub struct FreeBlockPtr {
-    ptr: *const FreeBlock,
+// a span of memory
+#[derive(Clone, Copy)]
+pub struct Allocation {
+    pub memory: &'static [u8],
 }
 
-const END: FreeBlockPtr = FreeBlockPtr { ptr: 0 as *const FreeBlock };
+impl Allocation {
+    fn make<T>(obj: &T, size: usize) -> Allocation {
+        Allocation { memory: unsafe { slice::from_raw_parts(obj as *const T as *const u8, size) } }
+    }
+
+    fn split_at(self, n: usize) -> (Allocation, Allocation) {
+        let (m1, m2) = self.memory.split_at(n);
+        (Allocation { memory: m1 }, Allocation { memory: m2 })
+    }
+
+    fn to_free_block(self, next: FreeBlockPtr) -> &'static mut FreeBlock {
+        let block = unsafe { &mut *(self.memory.as_ptr() as *mut u8 as *mut FreeBlock) };
+        block.next = next;
+        block.size = self.memory.len();
+        block
+    }
+
+    #[inline]
+    fn start(&self) -> *const u8 {
+        self.memory.as_ptr()
+    }
+
+    #[inline]
+    fn end(&self) -> *const u8 {
+        unsafe { self.memory.as_ptr().offset(self.memory.len() as isize) }
+    }
+}
+
+
+// a FreeBlockPtr has "interior mutability"
+#[derive(Clone, Copy)]
+pub struct FreeBlockPtr {
+    pub ptr: Option<&'static FreeBlock>,
+}
+
+const LAST: FreeBlockPtr = FreeBlockPtr { ptr: None };
 
 impl FreeBlockPtr {
-    pub fn at<T>(p: *const T, offset: isize) -> FreeBlockPtr {
-        let ptr = unsafe { (p as *const u8).offset(offset) } as *const FreeBlock;
-        FreeBlockPtr { ptr }
+    pub fn new(a: Allocation, next: FreeBlockPtr) -> FreeBlockPtr {
+        let block = a.to_free_block(next);
+        FreeBlockPtr { ptr: Some(block) }
     }
 
-    pub fn create_at<T>(p: *const T, offset: isize, next: *const FreeBlock, size: usize) -> FreeBlockPtr {
-        let ptr = FreeBlockPtr::at(p, offset);
-        ptr.block_mut().set(next, size);
-        ptr
+    pub fn start(&self) -> Option<*const u8> {
+        self.ptr.map(|p| p.start())
     }
 
-    pub fn create(memory: &'static [u8], next: *const FreeBlock) -> FreeBlockPtr {
-        let ptr = FreeBlockPtr::at(memory.as_ptr(), 0);
-        ptr.block_mut().set(next, memory.len());
-        ptr
+    pub fn end(&self) -> Option<*const u8> {
+        self.ptr.map(|p| p.end())
     }
 
-    pub fn block(&self) -> &'static FreeBlock {
-        unsafe { &*self.ptr }
-    }
-
-    pub fn block_mut(&self) -> &'static mut FreeBlock {
-        unsafe { &mut *(self.ptr as *mut FreeBlock) }
-    }
-
-    pub fn next(&self) -> Option<FreeBlockPtr> {
-        let next_ptr = self.block().next;
-        if next_ptr == END { None } else { Some(next_ptr) }
+    // attempt to allocate memory out of this block.
+    pub fn allocate(&mut self, amount: usize) -> Option<Allocation> {
+        self.ptr.and_then(|block| {
+            if amount > block.size {
+                None
+            } else if block.size - amount < FREE_BLOCK_SIZE {
+                // if there isn't enough left in this block for a new block, just use it all.
+                self.ptr = block.next.ptr;
+                Some(block.as_alloc())
+            } else {
+                // split off a new alloc
+                let (a1, a2) = block.as_alloc().split_at(amount);
+                self.ptr = Some(a2.to_free_block(block.next));
+                Some(a1)
+            }
+        })
     }
 
     // returns true if it actually inserted. returns false if inserting here
     // would break the ordering.
-    pub fn try_insert(&mut self, memory: &'static [u8]) -> bool {
-        let block = self.block_mut();
-
-        // if this is the end, append.
-        if *self == END {
-            self.ptr = FreeBlockPtr::create(memory, END.ptr).ptr;
-            return true;
+    pub fn try_insert(&mut self, a: Allocation) -> bool {
+        match self.ptr.as_mut() {
+            None => {
+                // if this is the end, append.
+                self.ptr = Some(a.to_free_block(LAST));
+                true
+            },
+            Some(block) => {
+                if block.start() > a.memory.as_ptr() {
+                    // insert before the current block.
+                    let new_block = a.to_free_block(*self);
+                    new_block.check_merge_next();
+                    self.ptr = Some(new_block);
+                    true
+                } else if block.end() == a.memory.as_ptr() {
+                    // merge to the end of this block.
+                    block.as_mut().size += a.memory.len();
+                    block.as_mut().check_merge_next();
+                    true
+                } else {
+                    false
+                }
+            }
         }
-
-        // insert before the current block.
-        if block.start() > memory.as_ptr() {
-            self.ptr = FreeBlockPtr::create(memory, self.ptr).ptr;
-            self.block_mut().check_merge_next();
-            return true;
-        }
-
-        // merge to the end of this block.
-        if block.merge(memory) {
-            block.check_merge_next();
-            return true;
-        }
-
-        // if this block points to the end, append.
-        if block.next == END {
-            block.next = FreeBlockPtr::create(memory, END.ptr);
-            return true;
-        }
-
-        false
     }
-}
 
-impl fmt::Debug for FreeBlockPtr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} @ {:?}", self.block().size, self.ptr)
+    // for internal mutations only
+    fn as_mut(&self) -> &mut FreeBlockPtr {
+        unsafe { &mut *(self as *const FreeBlockPtr as *mut FreeBlockPtr) }
     }
 }
 
 
 pub struct FreeBlock {
-    next: FreeBlockPtr,
-    size: usize,
+    pub next: FreeBlockPtr,
+    pub size: usize,
 }
 
 pub const FREE_BLOCK_SIZE: usize = size_of::<FreeBlock>();
 
 impl FreeBlock {
-    pub fn set(&mut self, next: *const FreeBlock, size: usize) {
-        self.next.ptr = next;
-        self.size = size;
+    fn as_alloc(&self) -> Allocation {
+        Allocation::make(self, self.size)
+    }
+
+    // for internal mutations only
+    fn as_mut(&self) -> &mut FreeBlock {
+        unsafe { &mut *(self as *const FreeBlock as *mut FreeBlock) }
     }
 
     pub fn start(&self) -> *const u8 {
-        self as *const FreeBlock as *const u8
+        self.as_alloc().start()
     }
 
     pub fn end(&self) -> *const u8 {
-        unsafe { self.start().offset(self.size as isize) }
-    }
-
-    // split this free block, keeping `amount` in this one, and the remainder in a new linked block.
-    pub fn split(&mut self, amount: usize) {
-        assert!(amount <= self.size);
-        assert!(amount >= FREE_BLOCK_SIZE && self.size - amount >= FREE_BLOCK_SIZE);
-
-        let next = FreeBlockPtr::at(self, amount as isize);
-        let next_block = next.block_mut();
-        next_block.size = self.size - amount;
-        next_block.next = FreeBlockPtr::at(self.next.ptr, 0);
-        self.size = amount;
-        self.next = next;
-    }
-
-    // attempt to allocate memory out of this block.
-    // if it's possible, return the memory and a replacement FreeBlockPtr (this one is gone).
-    pub fn allocate(&mut self, amount: usize) -> Option<(&'static [u8], FreeBlockPtr)> {
-        if amount > self.size { return None }
-        let memory = unsafe { slice::from_raw_parts(self as *const FreeBlock as *const u8, amount) };
-        // if there isn't enough left in this block for a new block, just use it all.
-        if self.size - amount < FREE_BLOCK_SIZE { return Some((memory, self.next)) }
-        let next = FreeBlockPtr::create_at(self, amount as isize, self.next.ptr, self.size - amount);
-        Some((memory, next))
-    }
-
-    // if `memory` follows this block sequentially, merge it in and return true.
-    pub fn merge(&mut self, memory: &'static [u8]) -> bool {
-        if self.end() == memory.as_ptr() {
-            self.size += memory.len();
-            true
-        } else {
-            false
-        }
+        self.as_alloc().end()
     }
 
     // check if this block and the next can be merged, and if so, merge them.
     pub fn check_merge_next(&mut self) {
-        if self.next != END && self.end() == self.next.block().start() {
-            let next = self.next.block();
-            self.size += next.size;
-            self.next = next.next;
+        self.next.ptr.map(|next| {
+            if self.end() == next.start() {
+                self.size += next.size;
+                self.next = next.next;
+            }
+        });
+    }
+}
+
+impl fmt::Debug for FreeBlock {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} @ {:?}", self.size, self as *const _)
+    }
+}
+
+
+pub struct FreeListIterator<'a> {
+    current: &'a FreeBlockPtr,
+}
+
+impl<'a> Iterator for FreeListIterator<'a> {
+    type Item = &'a FreeBlock;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current.ptr {
+            None => None,
+            Some(block) => {
+                self.current = &block.next;
+                Some(block)
+            }
         }
     }
 }
 
 
-pub struct FreeListIterator {
-    current: FreeBlockPtr,
+pub struct FreeListMutableIterator<'a> {
+    current: Option<&'a mut FreeBlockPtr>,
 }
 
-impl Iterator for FreeListIterator {
-    type Item = FreeBlockPtr;
+impl<'a> Iterator for FreeListMutableIterator<'a> {
+    type Item = &'a mut FreeBlockPtr;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current == END {
-            None
-        } else {
-            let current = self.current;
-            self.current = current.block().next;
-            Some(current)
-        }
-    }
-}
-
-
-pub struct FreeListMutableIterator {
-    current: *mut FreeBlockPtr,
-}
-
-impl Iterator for FreeListMutableIterator {
-    type Item = &'static mut FreeBlockPtr;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // we know that the iteration is safe, but rust can't know that.
-        let current = unsafe { &mut *self.current };
-        if *current == END {
-            None
-        } else {
-            self.current = &mut current.block_mut().next as *mut FreeBlockPtr;
-            Some(current)
+        match &self.current {
+            None => None,
+            Some(current) => {
+                // sleight of hand, to satisfy the borrow checker
+                let mut next = current.ptr.map(|b| b.next.as_mut());
+                swap(&mut next, &mut self.current);
+                next
+            }
         }
     }
 }
@@ -193,51 +202,43 @@ pub struct FreeList {
 }
 
 impl FreeList {
-    pub fn new(memory: &'static [u8]) -> FreeList {
-        FreeList { list: FreeBlockPtr::create(memory, END.ptr) }
+    pub fn new(memory: &'static mut [u8]) -> FreeList {
+        FreeList { list: FreeBlockPtr::new(Allocation { memory }, LAST) }
     }
 
     // for tests:
-    pub fn from_raw<T>(memory: &T, size: usize) -> FreeList {
-        FreeList::new(unsafe { &*(slice::from_raw_parts(memory as *const T as *const u8, size)) })
+    pub fn from_raw<T>(memory: &mut T, size: usize) -> FreeList {
+        FreeList::new(unsafe { &mut *(slice::from_raw_parts_mut(memory as *mut T as *mut u8, size)) })
     }
 
     pub fn iter(&self) -> FreeListIterator {
-        FreeListIterator { current: self.list }
+        FreeListIterator { current: &self.list }
     }
 
     pub fn iter_mut(&mut self) -> FreeListMutableIterator {
-        FreeListMutableIterator { current: &mut self.list as *mut FreeBlockPtr }
+        FreeListMutableIterator { current: Some(&mut self.list) }
     }
 
-    pub fn first(&self) -> Option<FreeBlockPtr> {
-        if self.list == END { None } else { Some(self.list) }
+    pub fn first(&self) -> FreeBlockPtr {
+        self.list
     }
 
     // for tests:
     pub fn first_available(&self) -> *const u8 {
-        self.list.ptr as *const u8
+        self.list.ptr.map(|block| block.as_alloc().memory.as_ptr()).unwrap_or(0 as *const u8)
     }
 
     // for tests:
     pub fn debug_chain(&self) -> Vec<usize> {
-        self.iter().map(|p| p.block().size).collect::<Vec<usize>>()
+        self.iter().map(|p| p.size).collect::<Vec<usize>>()
     }
 
-    pub fn allocate(&mut self, amount: usize) -> Option<&'static [u8]> {
-        for ptr in self.iter_mut() {
-            if let Some((memory, next)) = ptr.block_mut().allocate(amount) {
-                ptr.ptr = next.ptr;
-                return Some(memory);
-            }
-        }
-        None
+    pub fn allocate(&mut self, amount: usize) -> Option<Allocation> {
+        self.iter_mut().find_map(|p| p.allocate(amount))
     }
 
-    pub fn retire(&mut self, memory: &'static [u8]) {
-        for ptr in self.iter_mut() {
-            if ptr.try_insert(memory) { return }
-        }
+    pub fn retire(&mut self, a: Allocation) {
+        assert!(self.iter_mut().any(|p| p.try_insert(a)));
     }
 }
 
@@ -252,54 +253,53 @@ impl fmt::Debug for FreeList {
 
 #[cfg(test)]
 mod tests {
-    use core::slice;
-    use crate::FreeList;
+    use super::{Allocation, FreeList};
 
     #[test]
     fn allocate() {
-        let data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&data, 256);
+        let mut data: [u8; 256] = [0; 256];
+        let mut f = FreeList::from_raw(&mut data, 256);
         let origin = f.first_available();
         assert_eq!(origin, &data as *const u8);
         let alloc = f.allocate(120);
         assert!(alloc.is_some());
-        if let Some(memory) = alloc {
-            assert_eq!(origin, memory.as_ptr());
-            assert_eq!(memory.len(), 120);
+        if let Some(a) = alloc {
+            assert_eq!(origin, a.memory.as_ptr());
+            assert_eq!(a.memory.len(), 120);
         }
     }
 
     #[test]
     fn allocate_multiple() {
-        let data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&data, 256);
+        let mut data: [u8; 256] = [0; 256];
+        let mut f = FreeList::from_raw(&mut data, 256);
         let origin = f.first_available();
         let a1 = f.allocate(64);
         let a2 = f.allocate(32);
         let a3 = f.allocate(32);
-        assert_eq!(a1.map(|a| a.as_ptr()), Some(origin));
-        assert_eq!(a2.map(|a| a.as_ptr()), unsafe { a1.map(|a| a.as_ptr().offset(64)) });
-        assert_eq!(a3.map(|a| a.as_ptr()), unsafe { a1.map(|a| a.as_ptr().offset(96)) });
-        assert_eq!(Some(f.first_available()), unsafe { a1.map(|a| a.as_ptr().offset(128)) });
+        assert_eq!(a1.map(|a| a.memory.as_ptr()), Some(origin));
+        assert_eq!(a2.map(|a| a.memory.as_ptr()), unsafe { a1.map(|a| a.memory.as_ptr().offset(64)) });
+        assert_eq!(a3.map(|a| a.memory.as_ptr()), unsafe { a1.map(|a| a.memory.as_ptr().offset(96)) });
+        assert_eq!(Some(f.first_available()), unsafe { a1.map(|a| a.memory.as_ptr().offset(128)) });
     }
 
     #[test]
     fn allocate_to_exhaustion() {
-        let data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&data, 256);
+        let mut data: [u8; 256] = [0; 256];
+        let mut f = FreeList::from_raw(&mut data, 256);
         let first_addr = f.first_available();
         let a1 = f.allocate(128);
         let a2 = f.allocate(128);
         let a3 = f.allocate(16);
-        assert_eq!(a1.map(|a| a.as_ptr()), Some(first_addr));
-        assert_eq!(a2.map(|a| a.as_ptr()), unsafe { a1.map(|a| a.as_ptr().offset(128)) });
-        assert_eq!(a3, None);
+        assert_eq!(a1.map(|a| a.memory.as_ptr()), Some(first_addr));
+        assert_eq!(a2.map(|a| a.memory.as_ptr()), unsafe { a1.map(|a| a.memory.as_ptr().offset(128)) });
+        assert!(a3.is_none());
     }
 
     #[test]
     fn retire_first() {
-        let data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&data, 256);
+        let mut data: [u8; 256] = [0; 256];
+        let mut f = FreeList::from_raw(&mut data, 256);
         let origin = f.first_available();
         let a1 = f.allocate(64);
         assert!(a1.is_some());
@@ -314,10 +314,10 @@ mod tests {
 
     #[test]
     fn retire_last() {
-        let data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&data, 128);
+        let mut data: [u8; 256] = [0; 256];
+        let mut f = FreeList::from_raw(&mut data, 128);
         let origin = f.first_available();
-        let a = unsafe { slice::from_raw_parts(data[192..].as_ptr(), 64) };
+        let a = Allocation::make(&data[192], 64);
         f.retire(a);
         assert_eq!(f.debug_chain(), vec![ 128, 64 ]);
         assert_eq!(f.first_available(), origin);
@@ -325,15 +325,15 @@ mod tests {
 
     #[test]
     fn retire_middle() {
-        let data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&data, 128);
+        let mut data: [u8; 256] = [0; 256];
+        let mut f = FreeList::from_raw(&mut data, 128);
         let origin = f.first_available();
-        let a = unsafe { slice::from_raw_parts(data[192..].as_ptr(), 64) };
+        let a = Allocation::make(&data[192], 64);
         f.retire(a);
         assert_eq!(f.debug_chain(), vec![ 128, 64 ]);
         assert_eq!(f.first_available(), origin);
 
-        let b = unsafe { slice::from_raw_parts(data[128..].as_ptr(), 64) };
+        let b = Allocation::make(&data[128], 64);
         f.retire(b);
         assert_eq!(f.debug_chain(), vec![ 256 ]);
         assert_eq!(f.first_available(), origin);

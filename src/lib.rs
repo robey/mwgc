@@ -9,7 +9,7 @@ pub mod block_colors;
 pub mod free_list;
 
 pub use self::block_colors::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
-pub use self::free_list::{FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, FREE_BLOCK_SIZE};
+pub use self::free_list::{Allocation, FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, FREE_BLOCK_SIZE};
 
 /// configurable things:
 /// how many bytes are in each block of memory?
@@ -137,10 +137,10 @@ impl Heap {
         self.color_map.get_range(self.block_of(p), self.block_of(max))
     }
 
-    pub fn allocate(&mut self, amount: usize) -> Option<&'static [u8]> {
-        if let Some(memory) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
-            self.color_map.set_range(self.block_range_of(memory, self.current_color));
-            Some(memory)
+    pub fn allocate(&mut self, amount: usize) -> Option<Allocation> {
+        if let Some(a) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
+            self.color_map.set_range(self.block_range_of(a.memory, self.current_color));
+            Some(a)
         } else {
             None
         }
@@ -170,7 +170,7 @@ impl fmt::Debug for Heap {
 
 pub struct HeapIterator<'a> {
     heap: &'a Heap,
-    next_free: Option<FreeBlockPtr>,
+    next_free: FreeBlockPtr,
     current: *const u8,
 }
 
@@ -184,15 +184,15 @@ impl<'a> Iterator for HeapIterator<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.current >= self.heap.end { return None }
 
-        if let Some(free) = self.next_free {
-            if free.block().start() == self.current {
-                self.next_free = free.next();
-                self.current = free.block().end();
-                return Some(HeapSpan::from_free_block(free.block()));
+        if let Some(free) = self.next_free.ptr {
+            if free.start() == self.current {
+                self.next_free = free.next;
+                self.current = free.end();
+                return Some(HeapSpan::from_free_block(free));
             }
         }
 
-        let limit = self.next_free.map(|p| p.block() as *const FreeBlock as *const u8).unwrap_or(self.heap.end);
+        let limit = self.next_free.start().unwrap_or(self.heap.end);
         let span = self.heap.get_range(self.current, limit);
         self.current = self.heap.address_of(span.end);
         Some(HeapSpan::from_block_range(self.heap, span))
@@ -219,8 +219,8 @@ mod tests {
         let mut h = Heap::from_raw(&mut data);
         let alloc = h.allocate(32);
         assert!(alloc.is_some());
-        if let Some(memory) = alloc {
-            assert_eq!(memory.len(), 32);
+        if let Some(a) = alloc {
+            assert_eq!(a.memory.len(), 32);
             assert_eq!(h.dump(), "Blue[32], FREE[208]");
         }
     }
