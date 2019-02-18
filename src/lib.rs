@@ -1,5 +1,6 @@
 use core::fmt;
 use core::mem::size_of;
+use core::ptr;
 use core::slice;
 
 #[macro_use]
@@ -79,14 +80,18 @@ impl fmt::Debug for HeapSpan {
 }
 
 
+// 9 words
 pub struct Heap {
     pub start: *const u8,
     pub end: *const u8,
-    color_map: ColorMap,
     blocks: usize,
+    color_map: ColorMap,
+    free_list: FreeList,
     pub current_color: Color,
 
-    free_list: FreeList,
+    // for marking:
+    check_start: *const u8,
+    check_end: *const u8,
 }
 
 impl Heap {
@@ -100,19 +105,21 @@ impl Heap {
         let blocks = pool_size / BLOCK_SIZE_BYTES;
 
         // all of memory is free.
-        let pool = unsafe { slice::from_raw_parts_mut(pool_data.as_mut_ptr(), pool_size) };
+        let pool = Allocation::make(&pool_data[0], pool_size);
         Heap {
-            start: pool_data.as_ptr(),
-            end: unsafe { pool_data.as_ptr().offset(pool_size as isize) },
-            color_map: ColorMap::new(color_data),
+            start: pool.start(),
+            end: pool.end(),
             blocks,
+            color_map: ColorMap::new(color_data),
+            free_list: FreeList::new(pool),
             current_color: Color::Blue,
-            free_list: FreeList::new(pool)
+            check_start: ptr::null(),
+            check_end: ptr::null(),
         }
     }
 
-    // for tests:
-    pub fn from_raw<T>(memory: &mut T) -> Heap {
+    #[cfg(test)]
+    fn from_raw<T>(memory: &mut T) -> Heap {
         Heap::new(unsafe { &mut *(slice::from_raw_parts_mut(memory as *mut T as *mut u8, size_of::<T>())) })
     }
 
@@ -146,7 +153,12 @@ impl Heap {
         }
     }
 
-    pub fn iter(&self) -> HeapIterator {
+    pub fn mark_start(&mut self, roots: &[*const u8]) {
+        self.check_start = core::ptr::null();
+        self.check_end = core::ptr::null();
+    }
+
+    fn iter(&self) -> HeapIterator {
         HeapIterator { heap: self, next_free: self.free_list.first(), current: self.start }
     }
 

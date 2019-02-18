@@ -11,7 +11,7 @@ pub struct Allocation {
 }
 
 impl Allocation {
-    fn make<T>(obj: &T, size: usize) -> Allocation {
+    pub fn make<T>(obj: &T, size: usize) -> Allocation {
         Allocation { memory: unsafe { slice::from_raw_parts(obj as *const T as *const u8, size) } }
     }
 
@@ -28,13 +28,18 @@ impl Allocation {
     }
 
     #[inline]
-    fn start(&self) -> *const u8 {
+    pub fn start(&self) -> *const u8 {
         self.memory.as_ptr()
     }
 
     #[inline]
-    fn end(&self) -> *const u8 {
+    pub fn end(&self) -> *const u8 {
         unsafe { self.memory.as_ptr().offset(self.memory.len() as isize) }
+    }
+
+    #[cfg(test)]
+    pub fn offset(&self, n: isize) -> *const u8 {
+        unsafe { self.start().offset(n) }
     }
 }
 
@@ -202,13 +207,8 @@ pub struct FreeList {
 }
 
 impl FreeList {
-    pub fn new(memory: &'static mut [u8]) -> FreeList {
-        FreeList { list: FreeBlockPtr::new(Allocation { memory }, LAST) }
-    }
-
-    // for tests:
-    pub fn from_raw<T>(memory: &mut T, size: usize) -> FreeList {
-        FreeList::new(unsafe { &mut *(slice::from_raw_parts_mut(memory as *mut T as *mut u8, size)) })
+    pub fn new(alloc: Allocation) -> FreeList {
+        FreeList { list: FreeBlockPtr::new(alloc, LAST) }
     }
 
     pub fn iter(&self) -> FreeListIterator {
@@ -223,13 +223,13 @@ impl FreeList {
         self.list
     }
 
-    // for tests:
-    pub fn first_available(&self) -> *const u8 {
-        self.list.ptr.map(|block| block.as_alloc().memory.as_ptr()).unwrap_or(0 as *const u8)
+    #[cfg(test)]
+    fn first_available(&self) -> *const u8 {
+        self.list.ptr.map(|block| block.as_alloc().start()).unwrap_or(0 as *const u8)
     }
 
-    // for tests:
-    pub fn debug_chain(&self) -> Vec<usize> {
+    #[cfg(test)]
+    fn debug_chain(&self) -> Vec<usize> {
         self.iter().map(|p| p.size).collect::<Vec<usize>>()
     }
 
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn allocate() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&mut data, 256);
+        let mut f = FreeList::new(Allocation::make(&mut data, 256));
         let origin = f.first_available();
         assert_eq!(origin, &data as *const u8);
         let alloc = f.allocate(120);
@@ -272,34 +272,34 @@ mod tests {
     #[test]
     fn allocate_multiple() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&mut data, 256);
+        let mut f = FreeList::new(Allocation::make(&mut data, 256));
         let origin = f.first_available();
-        let a1 = f.allocate(64);
-        let a2 = f.allocate(32);
-        let a3 = f.allocate(32);
-        assert_eq!(a1.map(|a| a.memory.as_ptr()), Some(origin));
-        assert_eq!(a2.map(|a| a.memory.as_ptr()), unsafe { a1.map(|a| a.memory.as_ptr().offset(64)) });
-        assert_eq!(a3.map(|a| a.memory.as_ptr()), unsafe { a1.map(|a| a.memory.as_ptr().offset(96)) });
-        assert_eq!(Some(f.first_available()), unsafe { a1.map(|a| a.memory.as_ptr().offset(128)) });
+        let a1 = f.allocate(64).unwrap();
+        let a2 = f.allocate(32).unwrap();
+        let a3 = f.allocate(32).unwrap();
+        assert_eq!(a1.start(), origin);
+        assert_eq!(a2.start(), a1.offset(64));
+        assert_eq!(a3.start(), a1.offset(96));
+        assert_eq!(f.first_available(), a1.offset(128));
     }
 
     #[test]
     fn allocate_to_exhaustion() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&mut data, 256);
+        let mut f = FreeList::new(Allocation::make(&mut data, 256));
         let first_addr = f.first_available();
-        let a1 = f.allocate(128);
-        let a2 = f.allocate(128);
+        let a1 = f.allocate(128).unwrap();
+        let a2 = f.allocate(128).unwrap();
         let a3 = f.allocate(16);
-        assert_eq!(a1.map(|a| a.memory.as_ptr()), Some(first_addr));
-        assert_eq!(a2.map(|a| a.memory.as_ptr()), unsafe { a1.map(|a| a.memory.as_ptr().offset(128)) });
+        assert_eq!(a1.start(), first_addr);
+        assert_eq!(a2.start(), a1.offset(128));
         assert!(a3.is_none());
     }
 
     #[test]
     fn retire_first() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&mut data, 256);
+        let mut f = FreeList::new(Allocation::make(&mut data, 256));
         let origin = f.first_available();
         let a1 = f.allocate(64);
         assert!(a1.is_some());
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn retire_last() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&mut data, 128);
+        let mut f = FreeList::new(Allocation::make(&mut data, 128));
         let origin = f.first_available();
         let a = Allocation::make(&data[192], 64);
         f.retire(a);
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn retire_middle() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::from_raw(&mut data, 128);
+        let mut f = FreeList::new(Allocation::make(&mut data, 128));
         let origin = f.first_available();
         let a = Allocation::make(&data[192], 64);
         f.retire(a);
