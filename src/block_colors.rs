@@ -1,6 +1,5 @@
 use core::fmt;
 use core::mem;
-use core::slice;
 use crate::memory::Memory;
 
 // we need to reserve 2 bits per block for tracking.

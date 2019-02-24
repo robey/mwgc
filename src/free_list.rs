@@ -1,48 +1,8 @@
 use core::fmt;
 use core::mem::{size_of, swap};
-use core::slice;
 use crate::memory::Memory;
 
 // each free block is part of a linked list.
-
-// a span of memory
-#[derive(Clone, Copy)]
-pub struct Allocation {
-    pub memory: &'static [u8],
-}
-
-impl Allocation {
-    pub fn make<T>(obj: &T, size: usize) -> Allocation {
-        Allocation { memory: unsafe { slice::from_raw_parts(obj as *const T as *const u8, size) } }
-    }
-
-    pub fn split_at(self, n: usize) -> (Allocation, Allocation) {
-        let (m1, m2) = self.memory.split_at(n);
-        (Allocation { memory: m1 }, Allocation { memory: m2 })
-    }
-
-    fn to_free_block(self, next: FreeBlockPtr) -> &'static mut FreeBlock {
-        let block = unsafe { &mut *(self.memory.as_ptr() as *mut u8 as *mut FreeBlock) };
-        block.next = next;
-        block.size = self.memory.len();
-        block
-    }
-
-    #[inline]
-    pub fn start(&self) -> *const u8 {
-        self.memory.as_ptr()
-    }
-
-    #[inline]
-    pub fn end(&self) -> *const u8 {
-        unsafe { self.memory.as_ptr().offset(self.memory.len() as isize) }
-    }
-
-    #[cfg(test)]
-    pub fn offset(&self, n: isize) -> *const u8 {
-        unsafe { self.start().offset(n) }
-    }
-}
 
 
 // a FreeBlockPtr has "interior mutability"

@@ -1,7 +1,6 @@
 use core::fmt;
-use core::mem::size_of;
+// use core::mem::size_of;
 use core::ptr;
-use core::slice;
 
 #[macro_use]
 extern crate static_assertions;
@@ -11,7 +10,7 @@ pub mod free_list;
 pub mod memory;
 
 pub use self::block_colors::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
-pub use self::free_list::{Allocation, FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, FREE_BLOCK_SIZE};
+pub use self::free_list::{FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, FREE_BLOCK_SIZE};
 pub use self::memory::{Memory};
 
 
