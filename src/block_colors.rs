@@ -1,6 +1,7 @@
 use core::fmt;
 use core::mem;
 use core::slice;
+use crate::memory::Memory;
 
 // we need to reserve 2 bits per block for tracking.
 pub const BLOCKS_PER_COLORMAP_BYTE: usize = 8 / 2;
@@ -41,14 +42,10 @@ pub struct ColorMap {
 }
 
 impl ColorMap {
-    pub fn new(bits: &'static mut [u8]) -> ColorMap {
+    pub fn new(m: Memory) -> ColorMap {
+        let bits = m.inner();
         for i in 0..bits.len() { bits[i] = 0 }
         ColorMap { bits }
-    }
-
-    // for tests
-    pub fn from_raw<T>(memory: &mut T, size: usize) -> ColorMap {
-        ColorMap::new(unsafe { &mut *(slice::from_raw_parts_mut(memory as *mut T as *mut u8, size)) })
     }
 
     pub fn get(&self, n: usize) -> Color {
@@ -97,18 +94,19 @@ impl fmt::Debug for ColorMap {
 #[cfg(test)]
 mod tests {
     use crate::{BlockRange, Color, ColorMap};
+    use crate::memory::Memory;
 
     #[test]
     fn init() {
         let mut data: [u8; 4] = [0; 4];
-        let map = ColorMap::from_raw(&mut data, 4);
+        let map = ColorMap::new(Memory::take(&mut data));
         assert_eq!(format!("{:?}", map), "ColorMap(................)");
     }
 
     #[test]
     fn set_and_get_ranges() {
         let mut data: [u8; 4] = [0; 4];
-        let mut map = ColorMap::from_raw(&mut data, 4);
+        let mut map = ColorMap::new(Memory::take(&mut data));
         map.set_range(BlockRange { start: 0, end: 2, color: Color::Green });
         assert_eq!(format!("{:?}", map), "ColorMap(G...............)");
         assert_eq!(map.get_range(0, 2), BlockRange { start: 0, end: 2, color: Color::Green });

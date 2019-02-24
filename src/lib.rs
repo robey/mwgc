@@ -8,9 +8,12 @@ extern crate static_assertions;
 
 pub mod block_colors;
 pub mod free_list;
+pub mod memory;
 
 pub use self::block_colors::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
 pub use self::free_list::{Allocation, FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, FREE_BLOCK_SIZE};
+pub use self::memory::{Memory};
+
 
 /// configurable things:
 /// how many bytes are in each block of memory?
@@ -95,17 +98,18 @@ pub struct Heap {
 }
 
 impl Heap {
-    pub fn new(memory: &'static mut [u8]) -> Heap {
+    pub fn new(m: Memory) -> Heap {
         // total heap = pool + color_map, and pool is just color_map_size * blocks_per_colormap_byte * block_size
         // so color_map_size = heap size / (1 + bpm * bs)
         let divisor = 1 + BLOCKS_PER_COLORMAP_BYTE * BLOCK_SIZE_BYTES;
-        let color_map_size = div_ceil(memory.len(), divisor);
-        let pool_size = floor_to(memory.len() - color_map_size, BLOCK_SIZE_BYTES);
-        let (pool_data, color_data) = memory.split_at_mut(memory.len() - color_map_size);
+        let color_map_size = div_ceil(m.len(), divisor);
+        let pool_size = floor_to(m.len() - color_map_size, BLOCK_SIZE_BYTES);
+        let len = m.len();
+        let (pool_data, color_data) = m.split_at(len - color_map_size);
         let blocks = pool_size / BLOCK_SIZE_BYTES;
 
         // all of memory is free.
-        let pool = Allocation::make(&pool_data[0], pool_size);
+        let pool = pool_data.split_at(pool_size).0;
         Heap {
             start: pool.start(),
             end: pool.end(),
@@ -116,11 +120,6 @@ impl Heap {
             check_start: ptr::null(),
             check_end: ptr::null(),
         }
-    }
-
-    #[cfg(test)]
-    fn from_raw<T>(memory: &mut T) -> Heap {
-        Heap::new(unsafe { &mut *(slice::from_raw_parts_mut(memory as *mut T as *mut u8, size_of::<T>())) })
     }
 
     #[inline]
@@ -134,8 +133,8 @@ impl Heap {
     }
 
     #[inline]
-    fn block_range_of(&self, memory: &'static [u8], color: Color) -> BlockRange {
-        let start = self.block_of(memory.as_ptr());
+    fn block_range_of(&self, memory: &Memory, color: Color) -> BlockRange {
+        let start = self.block_of(memory.start());
         let end = start + memory.len() / BLOCK_SIZE_BYTES;
         BlockRange { start, end, color }
     }
@@ -144,10 +143,10 @@ impl Heap {
         self.color_map.get_range(self.block_of(p), self.block_of(max))
     }
 
-    pub fn allocate(&mut self, amount: usize) -> Option<Allocation> {
-        if let Some(a) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
-            self.color_map.set_range(self.block_range_of(a.memory, self.current_color));
-            Some(a)
+    pub fn allocate(&mut self, amount: usize) -> Option<Memory> {
+        if let Some(m) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
+            self.color_map.set_range(self.block_range_of(&m, self.current_color));
+            Some(m)
         } else {
             None
         }
@@ -214,12 +213,12 @@ impl<'a> Iterator for HeapIterator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::Heap;
+    use crate::{Heap, Memory};
 
     #[test]
     fn new_heap() {
         let mut data: [u8; 256] = [0; 256];
-        let h = Heap::from_raw(&mut data);
+        let h = Heap::new(Memory::take(&mut data));
         assert_eq!(h.start, &data[0] as *const u8);
         assert_eq!(h.end, unsafe { h.start.offset(240) });
         assert_eq!(h.dump(), "FREE[240]");
@@ -228,11 +227,11 @@ mod tests {
     #[test]
     fn allocate() {
         let mut data: [u8; 256] = [0; 256];
-        let mut h = Heap::from_raw(&mut data);
+        let mut h = Heap::new(Memory::take(&mut data));
         let alloc = h.allocate(32);
         assert!(alloc.is_some());
-        if let Some(a) = alloc {
-            assert_eq!(a.memory.len(), 32);
+        if let Some(m) = alloc {
+            assert_eq!(m.len(), 32);
             assert_eq!(h.dump(), "Blue[32], FREE[208]");
         }
     }

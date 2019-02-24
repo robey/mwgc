@@ -1,6 +1,7 @@
 use core::fmt;
 use core::mem::{size_of, swap};
 use core::slice;
+use crate::memory::Memory;
 
 // each free block is part of a linked list.
 
@@ -15,7 +16,7 @@ impl Allocation {
         Allocation { memory: unsafe { slice::from_raw_parts(obj as *const T as *const u8, size) } }
     }
 
-    fn split_at(self, n: usize) -> (Allocation, Allocation) {
+    pub fn split_at(self, n: usize) -> (Allocation, Allocation) {
         let (m1, m2) = self.memory.split_at(n);
         (Allocation { memory: m1 }, Allocation { memory: m2 })
     }
@@ -53,8 +54,8 @@ pub struct FreeBlockPtr {
 const LAST: FreeBlockPtr = FreeBlockPtr { ptr: None };
 
 impl FreeBlockPtr {
-    pub fn new(a: Allocation, next: FreeBlockPtr) -> FreeBlockPtr {
-        let block = a.to_free_block(next);
+    pub fn new(m: Memory, next: FreeBlockPtr) -> FreeBlockPtr {
+        let block = m.to_free_block(next);
         FreeBlockPtr { ptr: Some(block) }
     }
 
@@ -67,46 +68,46 @@ impl FreeBlockPtr {
     }
 
     // attempt to allocate memory out of this block.
-    pub fn allocate(&mut self, amount: usize) -> Option<Allocation> {
+    pub fn allocate(&mut self, amount: usize) -> Option<Memory> {
         self.ptr.and_then(|block| {
             if amount > block.size {
                 None
             } else if block.size - amount < FREE_BLOCK_SIZE {
                 // if there isn't enough left in this block for a new block, just use it all.
                 self.ptr = block.next.ptr;
-                Some(block.as_alloc())
+                Some(block.as_mut().to_memory())
             } else {
                 // split off a new alloc
-                let (a1, a2) = block.as_alloc().split_at(amount);
+                let (a1, a2) = block.as_mut().to_memory().split_at(amount);
                 self.ptr = Some(a2.to_free_block(block.next));
                 Some(a1)
             }
         })
     }
 
-    // returns true if it actually inserted. returns false if inserting here
+    // returns true if it actually inserted. returns the memory if inserting here
     // would break the ordering.
-    pub fn try_insert(&mut self, a: Allocation) -> bool {
+    pub fn try_insert(&mut self, m: Memory) -> Option<Memory> {
         match self.ptr.as_mut() {
             None => {
                 // if this is the end, append.
-                self.ptr = Some(a.to_free_block(LAST));
-                true
+                self.ptr = Some(m.to_free_block(LAST));
+                None
             },
             Some(block) => {
-                if block.start() > a.memory.as_ptr() {
+                if block.start() > m.start() {
                     // insert before the current block.
-                    let new_block = a.to_free_block(*self);
+                    let new_block = m.to_free_block(*self);
                     new_block.check_merge_next();
                     self.ptr = Some(new_block);
-                    true
-                } else if block.end() == a.memory.as_ptr() {
+                    None
+                } else if block.end() == m.start() {
                     // merge to the end of this block.
-                    block.as_mut().size += a.memory.len();
+                    block.as_mut().size += m.len();
                     block.as_mut().check_merge_next();
-                    true
+                    None
                 } else {
-                    false
+                    Some(m)
                 }
             }
         }
@@ -127,8 +128,9 @@ pub struct FreeBlock {
 pub const FREE_BLOCK_SIZE: usize = size_of::<FreeBlock>();
 
 impl FreeBlock {
-    fn as_alloc(&self) -> Allocation {
-        Allocation::make(self, self.size)
+    // presto-chango back to usable memory!
+    fn to_memory(&mut self) -> Memory {
+        Memory::make(self, self.size)
     }
 
     // for internal mutations only
@@ -136,12 +138,14 @@ impl FreeBlock {
         unsafe { &mut *(self as *const FreeBlock as *mut FreeBlock) }
     }
 
+    #[inline]
     pub fn start(&self) -> *const u8 {
-        self.as_alloc().start()
+        self as *const FreeBlock as *const u8
     }
 
+    #[inline]
     pub fn end(&self) -> *const u8 {
-        self.as_alloc().end()
+        ((self.start() as usize) + self.size) as *const u8
     }
 
     // check if this block and the next can be merged, and if so, merge them.
@@ -207,8 +211,8 @@ pub struct FreeList {
 }
 
 impl FreeList {
-    pub fn new(alloc: Allocation) -> FreeList {
-        FreeList { list: FreeBlockPtr::new(alloc, LAST) }
+    pub fn new(m: Memory) -> FreeList {
+        FreeList { list: FreeBlockPtr::new(m, LAST) }
     }
 
     pub fn iter(&self) -> FreeListIterator {
@@ -225,7 +229,7 @@ impl FreeList {
 
     #[cfg(test)]
     fn first_available(&self) -> *const u8 {
-        self.list.ptr.map(|block| block.as_alloc().start()).unwrap_or(0 as *const u8)
+        self.list.ptr.map(|block| block.start()).unwrap_or(0 as *const u8)
     }
 
     #[cfg(test)]
@@ -233,12 +237,20 @@ impl FreeList {
         self.iter().map(|p| p.size).collect::<Vec<usize>>()
     }
 
-    pub fn allocate(&mut self, amount: usize) -> Option<Allocation> {
+    pub fn allocate(&mut self, amount: usize) -> Option<Memory> {
         self.iter_mut().find_map(|p| p.allocate(amount))
     }
 
-    pub fn retire(&mut self, a: Allocation) {
-        assert!(self.iter_mut().any(|p| p.try_insert(a)));
+    pub fn retire(&mut self, m: Memory) {
+        // try_insert will return the memory if it won't fit here, so we
+        // do some ✨shenanigans✨ to move the memory thru an option, so
+        // rust will be satisfied.
+        let mut mm = Some(m);
+        assert!(self.iter_mut().any(|p| {
+            let m = mm.take().unwrap();
+            mm = p.try_insert(m);
+            mm.is_none()
+        }));
     }
 }
 
@@ -253,58 +265,58 @@ impl fmt::Debug for FreeList {
 
 #[cfg(test)]
 mod tests {
-    use super::{Allocation, FreeList};
+    use super::{FreeList, Memory};
 
     #[test]
     fn allocate() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Allocation::make(&mut data, 256));
+        let mut f = FreeList::new(Memory::take(&mut data));
         let origin = f.first_available();
         assert_eq!(origin, &data as *const u8);
         let alloc = f.allocate(120);
         assert!(alloc.is_some());
-        if let Some(a) = alloc {
-            assert_eq!(origin, a.memory.as_ptr());
-            assert_eq!(a.memory.len(), 120);
+        if let Some(m) = alloc {
+            assert_eq!(origin, m.start());
+            assert_eq!(m.len(), 120);
         }
     }
 
     #[test]
     fn allocate_multiple() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Allocation::make(&mut data, 256));
+        let mut f = FreeList::new(Memory::take(&mut data));
         let origin = f.first_available();
-        let a1 = f.allocate(64).unwrap();
-        let a2 = f.allocate(32).unwrap();
-        let a3 = f.allocate(32).unwrap();
-        assert_eq!(a1.start(), origin);
-        assert_eq!(a2.start(), a1.offset(64));
-        assert_eq!(a3.start(), a1.offset(96));
-        assert_eq!(f.first_available(), a1.offset(128));
+        let m1 = f.allocate(64).unwrap();
+        let m2 = f.allocate(32).unwrap();
+        let m3 = f.allocate(32).unwrap();
+        assert_eq!(m1.start(), origin);
+        assert_eq!(m2.start(), m1.offset(64));
+        assert_eq!(m3.start(), m1.offset(96));
+        assert_eq!(f.first_available(), m1.offset(128));
     }
 
     #[test]
     fn allocate_to_exhaustion() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Allocation::make(&mut data, 256));
+        let mut f = FreeList::new(Memory::take(&mut data));
         let first_addr = f.first_available();
-        let a1 = f.allocate(128).unwrap();
-        let a2 = f.allocate(128).unwrap();
-        let a3 = f.allocate(16);
-        assert_eq!(a1.start(), first_addr);
-        assert_eq!(a2.start(), a1.offset(128));
-        assert!(a3.is_none());
+        let m1 = f.allocate(128).unwrap();
+        let m2 = f.allocate(128).unwrap();
+        let m3 = f.allocate(16);
+        assert_eq!(m1.start(), first_addr);
+        assert_eq!(m2.start(), m1.offset(128));
+        assert!(m3.is_none());
     }
 
     #[test]
     fn retire_first() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Allocation::make(&mut data, 256));
+        let mut f = FreeList::new(Memory::take(&mut data));
         let origin = f.first_available();
-        let a1 = f.allocate(64);
-        assert!(a1.is_some());
-        if let Some(a) = a1 {
-            f.retire(a);
+        let m1 = f.allocate(64);
+        assert!(m1.is_some());
+        if let Some(m) = m1 {
+            f.retire(m);
             // the free block of 64 should have been merged back to the front
             // of the list as a single block.
             assert_eq!(f.debug_chain(), vec![ 256 ]);
@@ -315,10 +327,12 @@ mod tests {
     #[test]
     fn retire_last() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Allocation::make(&mut data, 128));
+        let (m1, m2) = Memory::take(&mut data).split_at(128);
+        let (m3, m4) = m2.split_at(64);
+
+        let mut f = FreeList::new(m1);
         let origin = f.first_available();
-        let a = Allocation::make(&data[192], 64);
-        f.retire(a);
+        f.retire(m4);
         assert_eq!(f.debug_chain(), vec![ 128, 64 ]);
         assert_eq!(f.first_available(), origin);
     }
@@ -326,15 +340,16 @@ mod tests {
     #[test]
     fn retire_middle() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Allocation::make(&mut data, 128));
+        let (m1, m2) = Memory::take(&mut data).split_at(128);
+        let (m3, m4) = m2.split_at(64);
+
+        let mut f = FreeList::new(m1);
         let origin = f.first_available();
-        let a = Allocation::make(&data[192], 64);
-        f.retire(a);
+        f.retire(m4);
         assert_eq!(f.debug_chain(), vec![ 128, 64 ]);
         assert_eq!(f.first_available(), origin);
 
-        let b = Allocation::make(&data[128], 64);
-        f.retire(b);
+        f.retire(m3);
         assert_eq!(f.debug_chain(), vec![ 256 ]);
         assert_eq!(f.first_available(), origin);
     }
