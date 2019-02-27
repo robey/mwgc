@@ -24,3 +24,8 @@
     - new allocs: mark with current state
     - algorithm:
         1. walk the entire range. add any "old color" block to the free list.
+
+## problem
+
+- when marking, we only have a pointer, but we need to find the extent of the allocation.
+- maybe mark all free space with a run of blue/green/check (anything but "cont") so that we can find the end of an allocation by scanning forward in the colormap?

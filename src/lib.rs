@@ -1,5 +1,5 @@
 use core::fmt;
-// use core::mem::size_of;
+use core::mem::{size_of, transmute};
 use core::ptr;
 
 #[macro_use]
@@ -44,11 +44,21 @@ fn ceil_to(n: usize, chunk: usize) -> usize {
 }
 
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum SpanType {
     Color(Color),
     Free
 }
+
+impl fmt::Debug for SpanType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SpanType::Free => write!(f, "FREE"),
+            SpanType::Color(color) => write!(f, "{:?}", color),
+        }
+    }
+}
+
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct HeapSpan {
@@ -73,11 +83,7 @@ impl HeapSpan {
 
 impl fmt::Debug for HeapSpan {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.span_type {
-            SpanType::Free => write!(f, "FREE"),
-            SpanType::Color(color) => write!(f, "{:?}", color),
-        }?;
-        write!(f, "[{}]", (self.end as usize) - (self.start as usize))
+        write!(f, "{:?}[{}]", self.span_type, (self.end as usize) - (self.start as usize))
     }
 }
 
@@ -138,22 +144,86 @@ impl Heap {
         BlockRange { start, end, color }
     }
 
-    fn get_range(&self, p: *const u8, max: *const u8) -> BlockRange {
-        self.color_map.get_range(self.block_of(p), self.block_of(max))
+    fn is_block(&self, p: *const u8) -> bool {
+        p >= self.start && p < self.end && ((p as usize) - (self.start as usize)) % BLOCK_SIZE_BYTES == 0
+    }
+
+    fn get_range(&self, p: *const u8) -> BlockRange {
+        self.color_map.get_range(self.block_of(p))
     }
 
     pub fn allocate(&mut self, amount: usize) -> Option<Memory> {
-        if let Some(m) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
+        if let Some(mut m) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
             self.color_map.set_range(self.block_range_of(&m, self.current_color));
+            m.clear();
             Some(m)
         } else {
             None
         }
     }
 
+    pub fn allocate_object<T>(&mut self) -> Option<&'static mut T> {
+        self.allocate(size_of::<T>()).map(|m| unsafe { transmute(m.inner().as_mut_ptr()) } )
+    }
+
+    // give back an allocation without waiting for a GC round.
+    pub fn retire(&mut self, m: Memory) {
+        self.color_map.free_range(self.block_range_of(&m, Color::Check));
+        self.free_list.retire(m);
+    }
+
+    // set up a mark phase, starting from these roots.
     pub fn mark_start(&mut self, roots: &[*const u8]) {
         self.check_start = core::ptr::null();
         self.check_end = core::ptr::null();
+        self.current_color = self.current_color.opposite();
+        for r in roots { self.mark(*r) }
+    }
+
+    // do one "round" of marking. if we're done after this round, returns true.
+    pub fn mark_round(&mut self) -> bool {
+        if self.check_start == core::ptr::null() { return true }
+
+        let (start, end) = (self.check_start, self.check_end);
+        self.check_start = core::ptr::null();
+        self.check_end = core::ptr::null();
+
+        let mut current = start;
+        while current <= end {
+            let r = self.get_range(current);
+            let start_addr = self.address_of(r.start) as *const usize;
+            let end_addr = self.address_of(r.end) as *const usize;
+            if r.color == Color::Check {
+                // pretend the whole memory block is words, and traverse it, marking anything we find.
+                let mut p = start_addr;
+                while p < end_addr {
+                    let word = unsafe { *p } as *const u8;
+                    self.mark(word);
+                    p = ((p as usize) + size_of::<usize>()) as *const usize;
+                }
+                self.color_map.set(self.block_of(current), self.current_color);
+            }
+            current = end_addr as *const u8;
+        }
+
+        // we're done marking if there's no new span to check.
+        self.check_start == core::ptr::null()
+    }
+
+    fn mark(&mut self, p: *const u8) {
+        println!("try {:?} in {:?}", p, self);
+        if self.is_block(p) {
+            let block = self.block_of(p);
+            if self.color_map.get(block) == self.current_color.opposite() {
+                self.color_map.set(block, Color::Check);
+                if self.check_start == core::ptr::null() || self.check_start > p {
+                    self.check_start = p;
+                }
+                if self.check_end == core::ptr::null() || self.check_end < p {
+                    self.check_end = p;
+                }
+            }
+        }
     }
 
     fn iter(&self) -> HeapIterator {
@@ -162,6 +232,10 @@ impl Heap {
 
     pub fn dump(&self) -> String {
         self.iter().map(|span| { format!("{:?}", span) }).collect::<Vec<String>>().join(", ")
+    }
+
+    pub fn dump_spans(&self) -> String {
+        self.iter().map(|span| { format!("{:?}", span.span_type) }).collect::<Vec<String>>().join(", ")
     }
 }
 
@@ -202,8 +276,7 @@ impl<'a> Iterator for HeapIterator<'a> {
             }
         }
 
-        let limit = self.next_free.start().unwrap_or(self.heap.end);
-        let span = self.heap.get_range(self.current, limit);
+        let span = self.heap.get_range(self.current);
         self.current = self.heap.address_of(span.end);
         Some(HeapSpan::from_block_range(self.heap, span))
     }
@@ -212,7 +285,23 @@ impl<'a> Iterator for HeapIterator<'a> {
 
 #[cfg(test)]
 mod tests {
+    use core::mem::size_of;
     use crate::{Heap, Memory};
+
+    // used to test the GC
+    struct Sample {
+        p: *const Sample,
+        number: usize,
+        next: *const Sample,
+        prev: *const Sample,
+    }
+
+    impl Sample {
+        pub fn ptr(&self) -> *const u8 {
+            self as *const Sample as *const u8
+        }
+    }
+
 
     #[test]
     fn new_heap() {
@@ -233,5 +322,56 @@ mod tests {
             assert_eq!(m.len(), 32);
             assert_eq!(h.dump(), "Blue[32], FREE[208]");
         }
+    }
+
+    #[test]
+    fn retire() {
+        let mut data: [u8; 256] = [0; 256];
+        let mut h = Heap::new(Memory::take(&mut data));
+        let a1 = h.allocate(32);
+        let a2 = h.allocate(32);
+        assert!(a1.is_some() && a2.is_some());
+        if let Some(m) = a1 {
+            h.retire(m);
+            assert_eq!(h.dump(), "FREE[32], Blue[32], FREE[176]");
+            assert_eq!(format!("{:?}", h.color_map), "ColorMap(CCB.CCCCCCCCCCCC)");
+        }
+    }
+
+    #[test]
+    fn mark_simple() {
+        let mut data: [u8; 256] = [0; 256];
+        let mut h = Heap::new(Memory::take(&mut data));
+        let o1 = h.allocate_object::<Sample>().unwrap();
+        let o2 = h.allocate_object::<Sample>().unwrap();
+        let o3 = h.allocate_object::<Sample>().unwrap();
+        let o4 = h.allocate_object::<Sample>().unwrap();
+        assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, FREE");
+
+        // leave o3 stranded. make o1 point to o2, which points to o4 and back to o1.
+        o1.p = o2 as *const Sample;
+        o2.p = 455 as *const Sample;
+        o2.next = o4 as *const Sample;
+        o2.prev = o1 as *const Sample;
+
+        h.mark_start(&[ o1.ptr() ]);
+        assert_eq!(h.check_start, o1.ptr());
+        assert_eq!(h.check_end, o1.ptr());
+        assert_eq!(h.dump_spans(), "Check, Blue, Blue, Blue, FREE");
+
+        assert!(!h.mark_round());
+        assert_eq!(h.check_start, o2.ptr());
+        assert_eq!(h.check_end, o2.ptr());
+        assert_eq!(h.dump_spans(), "Green, Check, Blue, Blue, FREE");
+
+        assert!(!h.mark_round());
+        assert_eq!(h.check_start, o4.ptr());
+        assert_eq!(h.check_end, o4.ptr());
+        assert_eq!(h.dump_spans(), "Green, Green, Blue, Check, FREE");
+
+        assert!(h.mark_round());
+        assert_eq!(h.check_start, core::ptr::null());
+        assert_eq!(h.check_end, core::ptr::null());
+        assert_eq!(h.dump_spans(), "Green, Green, Blue, Green, FREE");
     }
 }

@@ -19,6 +19,14 @@ impl Color {
     pub fn from_bits(n: u8) -> Color {
         unsafe { mem::transmute(n) }
     }
+
+    pub fn opposite(&self) -> Color {
+        match *self {
+            Color::Blue => Color::Green,
+            Color::Green => Color::Blue,
+            x => x
+        }
+    }
 }
 
 
@@ -43,8 +51,14 @@ pub struct ColorMap {
 impl ColorMap {
     pub fn new(m: Memory) -> ColorMap {
         let bits = m.inner();
-        for i in 0..bits.len() { bits[i] = 0 }
+        // mark whole area as "free" (check)
+        for i in 0..bits.len() { bits[i] = 0xff }
         ColorMap { bits }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.bits.len() * BLOCKS_PER_COLORMAP_BYTE
     }
 
     pub fn get(&self, n: usize) -> Color {
@@ -60,10 +74,10 @@ impl ColorMap {
         self.bits[n / 4] = (self.bits[n / 4] & mask) | replace;
     }
 
-    pub fn get_range(&self, n: usize, max: usize) -> BlockRange {
+    pub fn get_range(&self, n: usize) -> BlockRange {
         let color = self.get(n);
         let mut end = n + 1;
-        while end < max && self.get(end) == Color::Continue { end += 1 }
+        while end < self.len() && self.get(end) == Color::Continue { end += 1 }
         BlockRange { start: n, end, color }
     }
 
@@ -72,6 +86,14 @@ impl ColorMap {
         for i in (range.start + 1)..(range.end) { self.set(i, Color::Continue) }
     }
 
+    // free ranges must be marked with a run of "check" so they can terminate a previous range
+    pub fn free_range(&mut self, range: BlockRange) {
+        for i in (range.start)..(range.end) { self.set(i, Color::Check) }
+    }
+
+    pub fn iter(&self) -> ColorMapIterator {
+        ColorMapIterator { color_map: self, current: 0 }
+    }
 }
 
 impl fmt::Debug for ColorMap {
@@ -90,6 +112,23 @@ impl fmt::Debug for ColorMap {
 }
 
 
+pub struct ColorMapIterator<'a> {
+    color_map: &'a ColorMap,
+    current: usize,
+}
+
+impl<'a> Iterator for ColorMapIterator<'a> {
+    type Item = BlockRange;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current >= self.color_map.len() { return None }
+        let range = self.color_map.get_range(self.current);
+        self.current = range.end;
+        Some(range)
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use crate::{BlockRange, Color, ColorMap};
@@ -99,7 +138,7 @@ mod tests {
     fn init() {
         let mut data: [u8; 4] = [0; 4];
         let map = ColorMap::new(Memory::take(&mut data));
-        assert_eq!(format!("{:?}", map), "ColorMap(................)");
+        assert_eq!(format!("{:?}", map), "ColorMap(CCCCCCCCCCCCCCCC)");
     }
 
     #[test]
@@ -107,13 +146,12 @@ mod tests {
         let mut data: [u8; 4] = [0; 4];
         let mut map = ColorMap::new(Memory::take(&mut data));
         map.set_range(BlockRange { start: 0, end: 2, color: Color::Green });
-        assert_eq!(format!("{:?}", map), "ColorMap(G...............)");
-        assert_eq!(map.get_range(0, 2), BlockRange { start: 0, end: 2, color: Color::Green });
+        assert_eq!(format!("{:?}", map), "ColorMap(G.CCCCCCCCCCCCCC)");
+        assert_eq!(map.get_range(0), BlockRange { start: 0, end: 2, color: Color::Green });
 
         map.set_range(BlockRange { start: 2, end: 3, color: Color::Blue });
-        assert_eq!(map.get_range(2, 3), BlockRange { start: 2, end: 3, color: Color::Blue });
-        assert_eq!(map.get_range(0, 3), BlockRange { start: 0, end: 2, color: Color::Green });
-        assert_eq!(map.get_range(0, 10), BlockRange { start: 0, end: 2, color: Color::Green });
-        assert_eq!(format!("{:?}", map), "ColorMap(G.B.............)");
+        assert_eq!(map.get_range(2), BlockRange { start: 2, end: 3, color: Color::Blue });
+        assert_eq!(map.get_range(0), BlockRange { start: 0, end: 2, color: Color::Green });
+        assert_eq!(format!("{:?}", map), "ColorMap(G.BCCCCCCCCCCCCC)");
     }
 }

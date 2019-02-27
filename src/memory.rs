@@ -30,6 +30,10 @@ impl Memory {
         block
     }
 
+    pub fn clear(&mut self) {
+        for i in 0..(self.0.len()) { self.0[i] = 0 }
+    }
+
     #[inline]
     pub fn inner(self) -> &'static mut [u8] {
         self.0

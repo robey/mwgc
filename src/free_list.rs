@@ -288,7 +288,7 @@ mod tests {
     fn retire_last() {
         let mut data: [u8; 256] = [0; 256];
         let (m1, m2) = Memory::take(&mut data).split_at(128);
-        let (m3, m4) = m2.split_at(64);
+        let (_, m4) = m2.split_at(64);
 
         let mut f = FreeList::new(m1);
         let origin = f.first_available();
