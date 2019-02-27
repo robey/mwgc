@@ -5,11 +5,11 @@ use core::ptr;
 #[macro_use]
 extern crate static_assertions;
 
-pub mod block_colors;
+pub mod color_map;
 pub mod free_list;
 pub mod memory;
 
-pub use self::block_colors::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
+pub use self::color_map::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
 pub use self::free_list::{FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, FREE_BLOCK_SIZE};
 pub use self::memory::{Memory};
 
@@ -172,6 +172,14 @@ impl Heap {
         self.free_list.retire(m);
     }
 
+    // give back an allocation without waiting for a GC round.
+    pub fn retire_object<T>(&mut self, obj: &mut T) {
+        let range = self.get_range(obj as *mut T as *const T as *const u8);
+        let m = Memory::from_addresses(self.address_of(range.start), self.address_of(range.end));
+        self.color_map.free_range(range);
+        self.free_list.retire(m);
+    }
+
     // set up a mark phase, starting from these roots.
     pub fn mark_start(&mut self, roots: &[*const u8]) {
         self.check_start = core::ptr::null();
@@ -224,6 +232,10 @@ impl Heap {
                 }
             }
         }
+    }
+
+    pub fn get_mark_range(&self) -> (*const u8, *const u8) {
+        (self.check_start, self.check_end)
     }
 
     fn iter(&self) -> HeapIterator {
@@ -279,99 +291,5 @@ impl<'a> Iterator for HeapIterator<'a> {
         let span = self.heap.get_range(self.current);
         self.current = self.heap.address_of(span.end);
         Some(HeapSpan::from_block_range(self.heap, span))
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use core::mem::size_of;
-    use crate::{Heap, Memory};
-
-    // used to test the GC
-    struct Sample {
-        p: *const Sample,
-        number: usize,
-        next: *const Sample,
-        prev: *const Sample,
-    }
-
-    impl Sample {
-        pub fn ptr(&self) -> *const u8 {
-            self as *const Sample as *const u8
-        }
-    }
-
-
-    #[test]
-    fn new_heap() {
-        let mut data: [u8; 256] = [0; 256];
-        let h = Heap::new(Memory::take(&mut data));
-        assert_eq!(h.start, &data[0] as *const u8);
-        assert_eq!(h.end, unsafe { h.start.offset(240) });
-        assert_eq!(h.dump(), "FREE[240]");
-    }
-
-    #[test]
-    fn allocate() {
-        let mut data: [u8; 256] = [0; 256];
-        let mut h = Heap::new(Memory::take(&mut data));
-        let alloc = h.allocate(32);
-        assert!(alloc.is_some());
-        if let Some(m) = alloc {
-            assert_eq!(m.len(), 32);
-            assert_eq!(h.dump(), "Blue[32], FREE[208]");
-        }
-    }
-
-    #[test]
-    fn retire() {
-        let mut data: [u8; 256] = [0; 256];
-        let mut h = Heap::new(Memory::take(&mut data));
-        let a1 = h.allocate(32);
-        let a2 = h.allocate(32);
-        assert!(a1.is_some() && a2.is_some());
-        if let Some(m) = a1 {
-            h.retire(m);
-            assert_eq!(h.dump(), "FREE[32], Blue[32], FREE[176]");
-            assert_eq!(format!("{:?}", h.color_map), "ColorMap(CCB.CCCCCCCCCCCC)");
-        }
-    }
-
-    #[test]
-    fn mark_simple() {
-        let mut data: [u8; 256] = [0; 256];
-        let mut h = Heap::new(Memory::take(&mut data));
-        let o1 = h.allocate_object::<Sample>().unwrap();
-        let o2 = h.allocate_object::<Sample>().unwrap();
-        let o3 = h.allocate_object::<Sample>().unwrap();
-        let o4 = h.allocate_object::<Sample>().unwrap();
-        assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, FREE");
-
-        // leave o3 stranded. make o1 point to o2, which points to o4 and back to o1.
-        o1.p = o2 as *const Sample;
-        o2.p = 455 as *const Sample;
-        o2.next = o4 as *const Sample;
-        o2.prev = o1 as *const Sample;
-
-        h.mark_start(&[ o1.ptr() ]);
-        assert_eq!(h.check_start, o1.ptr());
-        assert_eq!(h.check_end, o1.ptr());
-        assert_eq!(h.dump_spans(), "Check, Blue, Blue, Blue, FREE");
-
-        assert!(!h.mark_round());
-        assert_eq!(h.check_start, o2.ptr());
-        assert_eq!(h.check_end, o2.ptr());
-        assert_eq!(h.dump_spans(), "Green, Check, Blue, Blue, FREE");
-
-        assert!(!h.mark_round());
-        assert_eq!(h.check_start, o4.ptr());
-        assert_eq!(h.check_end, o4.ptr());
-        assert_eq!(h.dump_spans(), "Green, Green, Blue, Check, FREE");
-
-        assert!(h.mark_round());
-        assert_eq!(h.check_start, core::ptr::null());
-        assert_eq!(h.check_end, core::ptr::null());
-        assert_eq!(h.dump_spans(), "Green, Green, Blue, Green, FREE");
     }
 }

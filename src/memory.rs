@@ -17,6 +17,10 @@ impl Memory {
         Memory(unsafe { slice::from_raw_parts_mut(obj as *mut T as *mut u8, size) })
     }
 
+    pub fn from_addresses(start: *const u8, end: *const u8) -> Memory {
+        Memory(unsafe { slice::from_raw_parts_mut(start as *mut u8, (end as usize) - (start as usize)) })
+    }
+
     pub fn split_at(self, n: usize) -> (Memory, Memory) {
         let (m1, m2) = self.0.split_at_mut(n);
         (Memory(m1), Memory(m2))
