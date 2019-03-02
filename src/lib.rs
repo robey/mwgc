@@ -10,7 +10,7 @@ pub mod free_list;
 pub mod memory;
 
 pub use self::color_map::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
-pub use self::free_list::{FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, FREE_BLOCK_SIZE};
+pub use self::free_list::{FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, FreeListSpan, FREE_BLOCK_SIZE};
 pub use self::memory::{Memory};
 
 
@@ -60,28 +60,30 @@ impl fmt::Debug for SpanType {
 }
 
 
-#[derive(Clone, Copy, PartialEq)]
-pub struct HeapSpan {
+#[derive(Clone, Copy)]
+pub struct HeapSpan<'a> {
     pub start: *const u8,
     pub end: *const u8,
     pub span_type: SpanType,
+    pub free_list_span: FreeListSpan<'a>,
 }
 
-impl HeapSpan {
-    fn from_free_block(block: &'static FreeBlock) -> HeapSpan {
-        HeapSpan { start: block.start(), end: block.end(), span_type: SpanType::Free }
+impl<'a> HeapSpan<'a> {
+    fn from_free_block(block: &'a FreeBlock, free_list_span: FreeListSpan<'a>) -> HeapSpan<'a> {
+        HeapSpan { start: block.start(), end: block.end(), span_type: SpanType::Free, free_list_span }
     }
 
-    fn from_block_range(heap: &Heap, range: BlockRange) -> HeapSpan {
+    fn from_block_range(heap: &Heap, range: BlockRange, free_list_span: FreeListSpan<'a>) -> HeapSpan<'a> {
         HeapSpan {
             start: heap.address_of(range.start),
             end: heap.address_of(range.end),
             span_type: SpanType::Color(range.color),
+            free_list_span,
         }
     }
 }
 
-impl fmt::Debug for HeapSpan {
+impl<'a> fmt::Debug for HeapSpan<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}[{}]", self.span_type, (self.end as usize) - (self.start as usize))
     }
@@ -238,8 +240,69 @@ impl Heap {
         (self.check_start, self.check_end)
     }
 
+    // free any spans that weren't marked
+    pub fn sweep(&mut self) {
+        // track previous & next free block:
+        //   - previous: where to try inserting a newly-freed span
+        //   - next: to skip spans where the color map is useless
+        // let mut prev_free = self.free_list.first_ref();
+        // let mut next_free = prev_free;
+        // let mut current = self.start;
+
+        // while current < self.end {
+        //     if let Some(free) = next_free.ptr {
+        //         if free.start() == current {
+        //             // skip free block
+        //             prev_free = next_free;
+        //             next_free = &free.next;
+        //             current = free.end();
+        //             continue;
+        //         }
+        //     }
+
+        //     let span = self.get_range(current);
+        //     current = self.address_of(span.end);
+        //     if span.color == self.current_color.opposite() {
+        //         // be free!
+        //         let m = Memory::from_addresses(self.address_of(span.start), self.address_of(span.end));
+        //         prev_free.as_mut().try_insert(m).or_else(|m| next_free.as_mut().try_insert(m));
+        //     }
+        // }
+
+//     // tricky: there are two lists to traverse in tandem. if the current
+//     // pointer is the next in the free list, that takes precedence.
+//     // otherwise, use the block map.
+//     fn next(&mut self) -> Option<Self::Item> {
+//         if self.current >= self.heap.end { return None }
+
+//         if let Some(free) = self.next_free.ptr {
+//             if free.start() == self.current {
+//                 self.next_free = free.next;
+//                 self.current = free.end();
+//                 return Some(HeapSpan::from_free_block(free));
+//             }
+//         }
+
+//         let span = self.heap.get_range(self.current);
+//         self.current = self.heap.address_of(span.end);
+//         Some(HeapSpan::from_block_range(self.heap, span))
+//     }
+// }
+
+        // let mut free = &mut self.free_list;
+        // let dead = self.iter().filter(|span| span.span_type == SpanType::Color(self.current_color.opposite()));
+        // // let mut free = self.free_list.iter_mut();
+        // dead.for_each(|span| {
+        //     (*free).retire(Memory::from_addresses(span.start, span.end));
+        // });
+
+        // self.iter().filter(|span| span.span_type == SpanType::Color(self.current_color.opposite())).map(|span| {
+        //     free.retire(Memory::from_addresses(span.start, span.end))
+        // });
+    }
+
     fn iter(&self) -> HeapIterator {
-        HeapIterator { heap: self, next_free: self.free_list.first(), current: self.start }
+        HeapIterator::new(self)
     }
 
     pub fn dump(&self) -> String {
@@ -266,30 +329,43 @@ impl fmt::Debug for Heap {
 
 pub struct HeapIterator<'a> {
     heap: &'a Heap,
-    next_free: FreeBlockPtr,
+    free_list_span: FreeListSpan<'a>,
     current: *const u8,
 }
 
+impl<'a> HeapIterator<'a> {
+    fn new(heap: &'a Heap) -> HeapIterator<'a> {
+        // there is always at least one span, because the final null pointer
+        // is yielded. we stop calling `next()` at that point, so we never
+        // get to the `None` end of the iteration.
+        let free_list_span = heap.free_list.iter_span();
+        HeapIterator { heap, free_list_span, current: heap.start }
+    }
+}
+
 impl<'a> Iterator for HeapIterator<'a> {
-    type Item = HeapSpan;
+    type Item = HeapSpan<'a>;
 
     // tricky: there are two lists to traverse in tandem. if the current
     // pointer is the next in the free list, that takes precedence.
-    // otherwise, use the block map, but don't let it follow a chain past
-    // the next free span.
+    // otherwise, use the block map.
     fn next(&mut self) -> Option<Self::Item> {
         if self.current >= self.heap.end { return None }
 
-        if let Some(free) = self.next_free.ptr {
+        if let Some(free) = self.free_list_span.ptr.ptr {
             if free.start() == self.current {
-                self.next_free = free.next;
+                let free_span: FreeListSpan<'a> = self.free_list_span;
+                // there is always at least one span, because the final null pointer
+                // is yielded. we stop calling `next()` at that point, so we never
+                // get to the `None` end of the iteration.
+                self.free_list_span = free_span.next().unwrap();
                 self.current = free.end();
-                return Some(HeapSpan::from_free_block(free));
+                return Some(HeapSpan::from_free_block(free, free_span));
             }
         }
 
         let span = self.heap.get_range(self.current);
         self.current = self.heap.address_of(span.end);
-        Some(HeapSpan::from_block_range(self.heap, span))
+        Some(HeapSpan::from_block_range(self.heap, span, self.free_list_span))
     }
 }
