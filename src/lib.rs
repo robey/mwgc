@@ -85,7 +85,11 @@ impl<'a> HeapSpan<'a> {
 
 impl<'a> fmt::Debug for HeapSpan<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}[{}]", self.span_type, (self.end as usize) - (self.start as usize))
+        if f.alternate() {
+            write!(f, "{:?}[{:?} - {:?}, between {:?} - {:?}]", self.span_type, self.start, self.end, self.free_list_span.insert_point, self.free_list_span.ptr)
+        } else {
+            write!(f, "{:?}[{}]", self.span_type, (self.end as usize) - (self.start as usize))
+        }
     }
 }
 
@@ -187,7 +191,7 @@ impl Heap {
         self.check_start = core::ptr::null();
         self.check_end = core::ptr::null();
         self.current_color = self.current_color.opposite();
-        for r in roots { self.mark(*r) }
+        for r in roots { self.check(*r) }
     }
 
     // do one "round" of marking. if we're done after this round, returns true.
@@ -208,7 +212,7 @@ impl Heap {
                 let mut p = start_addr;
                 while p < end_addr {
                     let word = unsafe { *p } as *const u8;
-                    self.mark(word);
+                    self.check(word);
                     p = ((p as usize) + size_of::<usize>()) as *const usize;
                 }
                 self.color_map.set(self.block_of(current), self.current_color);
@@ -220,8 +224,12 @@ impl Heap {
         self.check_start == core::ptr::null()
     }
 
-    fn mark(&mut self, p: *const u8) {
-        println!("try {:?} in {:?}", p, self);
+    pub fn mark(&mut self, roots: &[*const u8]) {
+        self.mark_start(roots);
+        while !self.mark_round() {}
+    }
+
+    fn check(&mut self, p: *const u8) {
         if self.is_block(p) {
             let block = self.block_of(p);
             if self.color_map.get(block) == self.current_color.opposite() {
@@ -242,63 +250,10 @@ impl Heap {
 
     // free any spans that weren't marked
     pub fn sweep(&mut self) {
-        // track previous & next free block:
-        //   - previous: where to try inserting a newly-freed span
-        //   - next: to skip spans where the color map is useless
-        // let mut prev_free = self.free_list.first_ref();
-        // let mut next_free = prev_free;
-        // let mut current = self.start;
-
-        // while current < self.end {
-        //     if let Some(free) = next_free.ptr {
-        //         if free.start() == current {
-        //             // skip free block
-        //             prev_free = next_free;
-        //             next_free = &free.next;
-        //             current = free.end();
-        //             continue;
-        //         }
-        //     }
-
-        //     let span = self.get_range(current);
-        //     current = self.address_of(span.end);
-        //     if span.color == self.current_color.opposite() {
-        //         // be free!
-        //         let m = Memory::from_addresses(self.address_of(span.start), self.address_of(span.end));
-        //         prev_free.as_mut().try_insert(m).or_else(|m| next_free.as_mut().try_insert(m));
-        //     }
-        // }
-
-//     // tricky: there are two lists to traverse in tandem. if the current
-//     // pointer is the next in the free list, that takes precedence.
-//     // otherwise, use the block map.
-//     fn next(&mut self) -> Option<Self::Item> {
-//         if self.current >= self.heap.end { return None }
-
-//         if let Some(free) = self.next_free.ptr {
-//             if free.start() == self.current {
-//                 self.next_free = free.next;
-//                 self.current = free.end();
-//                 return Some(HeapSpan::from_free_block(free));
-//             }
-//         }
-
-//         let span = self.heap.get_range(self.current);
-//         self.current = self.heap.address_of(span.end);
-//         Some(HeapSpan::from_block_range(self.heap, span))
-//     }
-// }
-
-        // let mut free = &mut self.free_list;
-        // let dead = self.iter().filter(|span| span.span_type == SpanType::Color(self.current_color.opposite()));
-        // // let mut free = self.free_list.iter_mut();
-        // dead.for_each(|span| {
-        //     (*free).retire(Memory::from_addresses(span.start, span.end));
-        // });
-
-        // self.iter().filter(|span| span.span_type == SpanType::Color(self.current_color.opposite())).map(|span| {
-        //     free.retire(Memory::from_addresses(span.start, span.end))
-        // });
+        self.iter().filter(|span| span.span_type == SpanType::Color(self.current_color.opposite())).for_each(|span| {
+            let m = Memory::from_addresses(span.start, span.end);
+            span.free_list_span.insert(m);
+        });
     }
 
     fn iter(&self) -> HeapIterator {
@@ -353,6 +308,12 @@ impl<'a> Iterator for HeapIterator<'a> {
         if self.current >= self.heap.end { return None }
 
         if let Some(free) = self.free_list_span.ptr.ptr {
+            // did they insert a new free item behind us when we gave out the last span?
+            if free.start() < self.current {
+                self.free_list_span = self.free_list_span.next().unwrap();
+                return self.next();
+            }
+
             if free.start() == self.current {
                 let free_span: FreeListSpan<'a> = self.free_list_span;
                 // there is always at least one span, because the final null pointer

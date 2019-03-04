@@ -90,4 +90,23 @@ mod test_mwgc {
         assert_eq!(h.get_mark_range(), (core::ptr::null(), core::ptr::null()));
         assert_eq!(h.dump_spans(), "Green, Green, Blue, Green, Green, FREE");
     }
+
+    #[test]
+    fn sweep_simple() {
+        let mut data: [u8; 256] = [0; 256];
+        let mut h = Heap::new(Memory::take(&mut data));
+        let o1 = h.allocate_object::<Sample>().unwrap();
+        let o2 = h.allocate_object::<Sample>().unwrap();
+        let o3 = h.allocate_object::<Sample>().unwrap();
+        let o4 = h.allocate_object::<Sample>().unwrap();
+        let o5 = h.allocate_object::<Sample>().unwrap();
+        assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, Blue, FREE");
+
+        o1.p = o3 as *const Sample;
+        h.mark(&[ o1.ptr() ]);
+        assert_eq!(h.dump_spans(), "Green, Blue, Green, Blue, Blue, FREE");
+
+        h.sweep();
+        assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
+    }
 }
