@@ -1,5 +1,5 @@
 use core::fmt;
-use core::mem::{size_of, transmute};
+use core::mem;
 use core::ptr;
 
 #[macro_use]
@@ -169,7 +169,7 @@ impl Heap {
     }
 
     pub fn allocate_object<T>(&mut self) -> Option<&'static mut T> {
-        self.allocate(size_of::<T>()).map(|m| unsafe { transmute(m.inner().as_mut_ptr()) } )
+        self.allocate(mem::size_of::<T>()).map(|m| unsafe { mem::transmute(m.inner().as_mut_ptr()) } )
     }
 
     // give back an allocation without waiting for a GC round.
@@ -188,19 +188,20 @@ impl Heap {
 
     // set up a mark phase, starting from these roots.
     pub fn mark_start(&mut self, roots: &[*const u8]) {
-        self.check_start = core::ptr::null();
-        self.check_end = core::ptr::null();
+        self.check_start = ptr::null();
+        self.check_end = ptr::null();
         self.current_color = self.current_color.opposite();
         for r in roots { self.check(*r) }
     }
 
-    // do one "round" of marking. if we're done after this round, returns true.
+    // do one "round" of marking. if we're done after this round, returns
+    // true. this lets you do an incremential(-ish) GC if you like.
     pub fn mark_round(&mut self) -> bool {
-        if self.check_start == core::ptr::null() { return true }
+        if self.check_start == ptr::null() { return true }
 
         let (start, end) = (self.check_start, self.check_end);
-        self.check_start = core::ptr::null();
-        self.check_end = core::ptr::null();
+        self.check_start = ptr::null();
+        self.check_end = ptr::null();
 
         let mut current = start;
         while current <= end {
@@ -213,7 +214,7 @@ impl Heap {
                 while p < end_addr {
                     let word = unsafe { *p } as *const u8;
                     self.check(word);
-                    p = ((p as usize) + size_of::<usize>()) as *const usize;
+                    p = ((p as usize) + mem::size_of::<usize>()) as *const usize;
                 }
                 self.color_map.set(self.block_of(current), self.current_color);
             }
@@ -221,9 +222,10 @@ impl Heap {
         }
 
         // we're done marking if there's no new span to check.
-        self.check_start == core::ptr::null()
+        self.check_start == ptr::null()
     }
 
+    // do the entire mark phase.
     pub fn mark(&mut self, roots: &[*const u8]) {
         self.mark_start(roots);
         while !self.mark_round() {}
@@ -234,10 +236,10 @@ impl Heap {
             let block = self.block_of(p);
             if self.color_map.get(block) == self.current_color.opposite() {
                 self.color_map.set(block, Color::Check);
-                if self.check_start == core::ptr::null() || self.check_start > p {
+                if self.check_start == ptr::null() || self.check_start > p {
                     self.check_start = p;
                 }
-                if self.check_end == core::ptr::null() || self.check_end < p {
+                if self.check_end == ptr::null() || self.check_end < p {
                     self.check_end = p;
                 }
             }

@@ -92,8 +92,6 @@ impl FreeBlockPtr {
         }
     }
 
-    // consumes the memory if it actually inserted. returns the memory if
-    // inserting here would break the ordering.
     pub fn try_insert(&self, m: Memory) -> Option<Memory> {
         self.try_insert_before(m).and_then(|m| self.try_insert_after(m))
     }
