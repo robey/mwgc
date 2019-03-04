@@ -88,6 +88,12 @@ impl FreeBlockPtr {
     }
 }
 
+impl fmt::Debug for FreeBlockPtr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.ptr)
+    }
+}
+
 
 pub struct FreeBlock {
     pub next: FreeBlockPtr,
