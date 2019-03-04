@@ -50,7 +50,7 @@ mod test_mwgc {
         h.retire(m2);
         assert_eq!(h.dump(), "FREE[240]");
 
-        let mut m3 = h.allocate_object::<Sample>().unwrap();
+        let m3 = h.allocate_object::<Sample>().unwrap();
         assert_eq!(h.dump(), format!("Blue[{}], FREE[{}]", size_of::<Sample>(), 240 - size_of::<Sample>()));
         h.retire_object(m3);
         assert_eq!(h.dump(), "FREE[240]");
@@ -62,7 +62,7 @@ mod test_mwgc {
         let mut h = Heap::new(Memory::take(&mut data));
         let o1 = h.allocate_object::<Sample>().unwrap();
         let o2 = h.allocate_object::<Sample>().unwrap();
-        let o3 = h.allocate_object::<Sample>().unwrap();
+        let _o3 = h.allocate_object::<Sample>().unwrap();
         let o4 = h.allocate_object::<Sample>().unwrap();
         let o5 = h.allocate_object::<Sample>().unwrap();
         assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, Blue, FREE");
@@ -73,6 +73,7 @@ mod test_mwgc {
         o2.next = o5 as *const Sample;
         o2.prev = o1 as *const Sample;
         o4.p = 455 as *const Sample;
+        o5.number = 23;
 
         h.mark_start(&[ o1.ptr() ]);
         assert_eq!(h.get_mark_range(), (o1.ptr(), o1.ptr()));
@@ -96,17 +97,22 @@ mod test_mwgc {
         let mut data: [u8; 256] = [0; 256];
         let mut h = Heap::new(Memory::take(&mut data));
         let o1 = h.allocate_object::<Sample>().unwrap();
-        let o2 = h.allocate_object::<Sample>().unwrap();
+        let _o2 = h.allocate_object::<Sample>().unwrap();
         let o3 = h.allocate_object::<Sample>().unwrap();
-        let o4 = h.allocate_object::<Sample>().unwrap();
-        let o5 = h.allocate_object::<Sample>().unwrap();
+        let _o4 = h.allocate_object::<Sample>().unwrap();
+        let _o5 = h.allocate_object::<Sample>().unwrap();
         assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, Blue, FREE");
 
         o1.p = o3 as *const Sample;
         h.mark(&[ o1.ptr() ]);
         assert_eq!(h.dump_spans(), "Green, Blue, Green, Blue, Blue, FREE");
-
         h.sweep();
         assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
+
+        o1.p = core::ptr::null();
+        h.mark(&[ o1.ptr() ]);
+        assert_eq!(h.dump_spans(), "Blue, FREE, Green, FREE");
+        h.sweep();
+        assert_eq!(h.dump_spans(), "Blue, FREE");
     }
 }

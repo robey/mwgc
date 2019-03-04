@@ -53,9 +53,24 @@ impl FreeBlockPtr {
         })
     }
 
-    // consumes the memory if it actually inserted. returns the memory if
-    // inserting here would break the ordering.
-    pub fn try_insert(&self, m: Memory) -> Option<Memory> {
+    // the inserts will consume the memory if it was successfully inserted,
+    // or return it if this isn't the right place.
+
+    pub fn try_insert_before(&self, m: Memory) -> Option<Memory> {
+        let s = self.as_mut();
+        if let Some(block) = s.ptr.as_mut() {
+            if block.start() > m.start() {
+                // insert before the current block.
+                let new_block = m.to_free_block(*self);
+                new_block.check_merge_next();
+                s.ptr = Some(new_block);
+                return None
+            }
+        }
+        Some(m)
+    }
+
+    pub fn try_insert_after(&self, m: Memory) -> Option<Memory> {
         let s = self.as_mut();
         match s.ptr.as_mut() {
             None => {
@@ -64,13 +79,7 @@ impl FreeBlockPtr {
                 None
             },
             Some(block) => {
-                if block.start() > m.start() {
-                    // insert before the current block.
-                    let new_block = m.to_free_block(*self);
-                    new_block.check_merge_next();
-                    s.ptr = Some(new_block);
-                    None
-                } else if block.end() == m.start() {
+                if block.end() == m.start() {
                     // merge to the end of this block.
                     block.as_mut().size += m.len();
                     block.as_mut().check_merge_next();
@@ -80,6 +89,12 @@ impl FreeBlockPtr {
                 }
             }
         }
+    }
+
+    // consumes the memory if it actually inserted. returns the memory if
+    // inserting here would break the ordering.
+    pub fn try_insert(&self, m: Memory) -> Option<Memory> {
+        self.try_insert_before(m).and_then(|m| self.try_insert_after(m))
     }
 
     // for internal mutations only
@@ -174,7 +189,7 @@ impl<'a> FreeListSpan<'a> {
     // if you know for sure the memory will slot between these two free
     // blocks (in this span), we can do it O(1).
     pub fn insert(&self, m: Memory) {
-        assert!(self.insert_point.try_insert(m).and_then(|m| self.ptr.try_insert(m)).is_none());
+        assert!(self.insert_point.try_insert_after(m).and_then(|m| self.ptr.try_insert_before(m)).is_none());
     }
 
     // you can traverse the free list as if this was an iterator.
