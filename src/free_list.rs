@@ -1,5 +1,5 @@
 use core::fmt;
-use core::mem::{size_of, swap};
+use core::mem;
 use crate::memory::Memory;
 
 // each free block is part of a linked list.
@@ -36,18 +36,19 @@ impl FreeBlockPtr {
     }
 
     // attempt to allocate memory out of this block.
-    pub fn allocate(&mut self, amount: usize) -> Option<Memory> {
-        self.ptr.and_then(|block| {
+    pub fn allocate(&self, amount: usize) -> Option<Memory> {
+        let s = self.as_mut();
+        s.ptr.and_then(|block| {
             if amount > block.size {
                 None
             } else if block.size - amount < FREE_BLOCK_SIZE {
                 // if there isn't enough left in this block for a new block, just use it all.
-                self.ptr = block.next.ptr;
+                s.ptr = block.next.ptr;
                 Some(block.as_mut().to_memory())
             } else {
                 // split off a new alloc
                 let (a1, a2) = block.as_mut().to_memory().split_at(amount);
-                self.ptr = Some(a2.to_free_block(block.next));
+                s.ptr = Some(a2.to_free_block(block.next));
                 Some(a1)
             }
         })
@@ -115,7 +116,7 @@ pub struct FreeBlock {
     pub size: usize,
 }
 
-pub const FREE_BLOCK_SIZE: usize = size_of::<FreeBlock>();
+pub const FREE_BLOCK_SIZE: usize = mem::size_of::<FreeBlock>();
 
 impl FreeBlock {
     // presto-chango back to usable memory!
@@ -182,7 +183,7 @@ pub struct FreeListSpan<'a> {
 }
 
 impl<'a> FreeListSpan<'a> {
-    pub fn new(p: &'a FreeBlockPtr) -> FreeListSpan<'a> {
+    fn new(p: &'a FreeBlockPtr) -> FreeListSpan<'a> {
         FreeListSpan { insert_point: p, ptr: p }
     }
 
@@ -201,44 +202,23 @@ impl<'a> FreeListSpan<'a> {
 }
 
 
-pub struct FreeListMutableIterator<'a> {
-    current: Option<&'a mut FreeBlockPtr>,
+pub struct FreeListSpanIterator<'a> {
+    next: Option<FreeListSpan<'a>>,
 }
 
-impl<'a> FreeListMutableIterator<'a> {
-    // add memory to the free list, starting from the FreeBlockPtr that
-    // would be emitted next. if it can be inserted here, the iterator will
-    // be moved up so that the next emitted FreeBlockPtr will be where it was
-    // inserted. (this is used by sweep, which has a list of memory spans
-    // to insert, pre-sorted. it can use this to insert them all in O(n).)
-    pub fn retire(&mut self, m: Memory) -> bool {
-        // try_insert will return the memory if it won't fit here, so we
-        // do some ✨shenanigans✨ to move the memory thru an option, so
-        // rust will be satisfied.
-        let mut mm = Some(m);
-        while let Some(ptr) = &mut self.current {
-            let m = mm.take().unwrap();
-            mm = (*ptr).try_insert(m);
-            if mm.is_none() { return true }
-            self.next();
-        }
-        false
+impl<'a> FreeListSpanIterator<'a> {
+    fn new(p: &'a FreeBlockPtr) -> FreeListSpanIterator<'a> {
+        FreeListSpanIterator { next: Some(FreeListSpan::new(p)) }
     }
 }
 
-impl<'a> Iterator for FreeListMutableIterator<'a> {
-    type Item = &'a mut FreeBlockPtr;
+impl<'a> Iterator for FreeListSpanIterator<'a> {
+    type Item = FreeListSpan<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &self.current {
-            None => None,
-            Some(current) => {
-                // sleight of hand, to satisfy the borrow checker
-                let mut next = current.ptr.map(|b| b.next.as_mut());
-                swap(&mut next, &mut self.current);
-                next
-            }
-        }
+        let rv = self.next;
+        self.next = rv.and_then(|s| s.next());
+        rv
     }
 }
 
@@ -260,12 +240,8 @@ impl FreeList {
     // which will be the previous FreeBlockPtr or the initial one. the final
     // FreeBlockPtr will be a null pointer, so at least one FreeBlockPtr is
     // always yielded, even for an empty list.
-    pub fn iter_span(&self) -> FreeListSpan {
-        FreeListSpan::new(&self.list)
-    }
-
-    pub fn iter_mut(&mut self) -> FreeListMutableIterator {
-        FreeListMutableIterator { current: Some(&mut self.list) }
+    pub fn iter_span(&self) -> FreeListSpanIterator {
+        FreeListSpanIterator::new(&self.list)
     }
 
     pub fn first(&self) -> FreeBlockPtr {
@@ -288,22 +264,22 @@ impl FreeList {
 
     #[cfg(test)]
     fn debug_span_chain(&self) -> Vec<usize> {
-        let mut v = Vec::<usize>::new();
-        let mut span = self.iter_span();
-        loop {
-            v.push(span.ptr.size().unwrap_or(0));
-            let next = span.next();
-            if next.is_none() { return v }
-            span = next.unwrap();
-        }
+        self.iter_span().map(|s| s.ptr.size().unwrap_or(0)).collect::<Vec<usize>>()
     }
 
     pub fn allocate(&mut self, amount: usize) -> Option<Memory> {
-        self.iter_mut().find_map(|p| p.allocate(amount))
+        self.iter_span().find_map(|p| p.ptr.allocate(amount))
     }
 
     pub fn retire(&mut self, m: Memory) {
-        assert!(self.iter_mut().retire(m));
+        // try_insert will return the memory if it won't fit here, so we
+        // do some ✨shenanigans✨ to move the memory thru an option, so
+        // rust will be satisfied.
+        let mut mm = Some(m);
+        assert!(self.iter_span().any(|span| {
+            mm = span.ptr.try_insert(mm.take().unwrap());
+            mm.is_none()
+        }));
     }
 }
 

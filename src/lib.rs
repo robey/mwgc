@@ -293,7 +293,7 @@ impl<'a> HeapIterator<'a> {
         // there is always at least one span, because the final null pointer
         // is yielded. we stop calling `next()` at that point, so we never
         // get to the `None` end of the iteration.
-        let free_list_span = heap.free_list.iter_span();
+        let free_list_span = heap.free_list.iter_span().next().unwrap();
         HeapIterator { heap, free_list_span, current: heap.start }
     }
 }
