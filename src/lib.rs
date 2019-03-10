@@ -175,6 +175,10 @@ impl<'heap> Heap<'heap> {
         }
     }
 
+    pub fn from_bytes(bytes: &'heap mut [u8]) -> Heap {
+        Heap::new(Memory::new(bytes))
+    }
+
     #[inline]
     fn address_of(&self, block: usize) -> *const u8 {
         ((self.start as usize) + block * BLOCK_SIZE_BYTES) as *const u8
@@ -210,13 +214,21 @@ impl<'heap> Heap<'heap> {
         }
     }
 
-    pub fn allocate_object<T>(&mut self) -> Option<&'static mut T> {
-        self.allocate(mem::size_of::<T>()).map(|m| unsafe { mem::transmute(m.inner().as_mut_ptr()) })
+    pub fn allocate_object<T: Default>(&mut self) -> Option<&'heap mut T> {
+        self.allocate(mem::size_of::<T>()).map(|m| {
+            let obj: &'heap mut T = unsafe { mem::transmute(m.inner().as_mut_ptr()) };
+            *obj = T::default();
+            obj
+        })
     }
 
-    pub fn allocate_array<T>(&mut self, count: usize) -> Option<&[T]> {
+    pub fn allocate_array<T: Default>(&mut self, count: usize) -> Option<&'heap mut [T]> {
         self.allocate(mem::size_of::<T>() * count).map(|m| unsafe {
-            slice::from_raw_parts(mem::transmute(m.inner().as_mut_ptr()), count)
+            let array: &'heap mut [T] = slice::from_raw_parts_mut(mem::transmute(m.inner().as_mut_ptr()), count);
+            for item in array.iter_mut() {
+                *item = T::default();
+            }
+            array
         })
     }
 

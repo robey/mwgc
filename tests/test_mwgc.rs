@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod test_mwgc {
-    use core::mem;
+    use core::{mem, ptr};
     use mwgc::{Heap, Memory};
 
     static mut DATA: [u8; 256] = [0; 256];
@@ -17,6 +17,10 @@ mod test_mwgc {
         pub fn ptr(&self) -> *const u8 {
             self as *const Sample as *const u8
         }
+    }
+
+    impl Default for Sample {
+        fn default() -> Self { Sample { p: ptr::null(), number: 0, next: ptr::null(), prev: ptr::null() } }
     }
 
 
