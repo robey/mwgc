@@ -87,7 +87,7 @@ impl<'a> fmt::Debug for HeapSpan<'a> {
 
 
 pub struct HeapIterator<'a> {
-    heap: &'a Heap,
+    heap: &'a Heap<'a>,
     free_list_span: FreeListSpan<'a>,
     current: *const u8,
 }
@@ -137,12 +137,12 @@ impl<'a> Iterator for HeapIterator<'a> {
 
 
 // 9 words
-pub struct Heap {
+pub struct Heap<'heap> {
     pub start: *const u8,
     pub end: *const u8,
     blocks: usize,
-    color_map: ColorMap,
-    free_list: FreeList,
+    color_map: ColorMap<'heap>,
+    free_list: FreeList<'heap>,
     pub current_color: Color,
 
     // for marking:
@@ -150,8 +150,8 @@ pub struct Heap {
     check_end: *const u8,
 }
 
-impl Heap {
-    pub fn new(m: Memory) -> Heap {
+impl<'heap> Heap<'heap> {
+    pub fn new(m: Memory<'heap>) -> Heap<'heap> {
         // total heap = pool + color_map, and pool is just color_map_size * blocks_per_colormap_byte * block_size
         // so color_map_size = heap size / (1 + bpm * bs)
         let divisor = 1 + BLOCKS_PER_COLORMAP_BYTE * BLOCK_SIZE_BYTES;
@@ -200,7 +200,7 @@ impl Heap {
         self.color_map.get_range(self.block_of(p))
     }
 
-    pub fn allocate(&mut self, amount: usize) -> Option<Memory> {
+    pub fn allocate(&mut self, amount: usize) -> Option<Memory<'heap>> {
         if let Some(mut m) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
             self.color_map.set_range(self.block_range_of(&m, self.current_color));
             m.clear();
@@ -221,7 +221,7 @@ impl Heap {
     }
 
     // give back an allocation without waiting for a GC round.
-    pub fn retire(&mut self, m: Memory) {
+    pub fn retire(&mut self, m: Memory<'heap>) {
         self.color_map.free_range(self.block_range_of(&m, Color::Check));
         self.free_list.retire(m);
     }
@@ -325,7 +325,7 @@ impl Heap {
     }
 }
 
-impl fmt::Debug for Heap {
+impl<'a> fmt::Debug for Heap<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Heap(pool={:?}, blocks={}x{}, ", self.start, self.blocks, BLOCK_SIZE_BYTES)?;
         if f.alternate() {

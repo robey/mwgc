@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod test_mwgc {
-    use core::mem::size_of;
+    use core::mem;
     use mwgc::{Heap, Memory};
 
     static mut DATA: [u8; 256] = [0; 256];
@@ -23,8 +23,9 @@ mod test_mwgc {
     #[test]
     fn new_heap() {
         let mut data: [u8; 256] = [0; 256];
-        let h = Heap::new(Memory::take(&mut data));
-        assert_eq!(h.start, &data[0] as *const u8);
+        let start = &data[0] as *const u8;
+        let h = Heap::new(Memory::new(&mut data));
+        assert_eq!(h.start, start);
         assert_eq!(h.end, unsafe { h.start.offset(240) });
         assert_eq!(h.dump(), "FREE[240]");
     }
@@ -32,7 +33,7 @@ mod test_mwgc {
     #[test]
     fn allocate() {
         let mut data: [u8; 256] = [0; 256];
-        let mut h = Heap::new(Memory::take(&mut data));
+        let mut h = Heap::new(Memory::new(&mut data));
         let alloc = h.allocate(32);
         assert!(alloc.is_some());
         if let Some(m) = alloc {
@@ -44,7 +45,7 @@ mod test_mwgc {
     #[test]
     fn allocate_array() {
         let mut data: [u8; 256] = [0; 256];
-        let mut h = Heap::new(Memory::take(&mut data));
+        let mut h = Heap::new(Memory::new(&mut data));
         let array = h.allocate_array::<u32>(10);
         assert!(array.is_some());
         if let Some(a) = array {
@@ -57,7 +58,7 @@ mod test_mwgc {
     #[test]
     fn retire() {
         let mut data: [u8; 256] = [0; 256];
-        let mut h = Heap::new(Memory::take(&mut data));
+        let mut h = Heap::new(Memory::new(&mut data));
         let m1 = h.allocate(32).unwrap();
         let m2 = h.allocate(32).unwrap();
         h.retire(m1);
@@ -66,7 +67,7 @@ mod test_mwgc {
         assert_eq!(h.dump(), "FREE[240]");
 
         let m3 = h.allocate_object::<Sample>().unwrap();
-        assert_eq!(h.dump(), format!("Blue[{}], FREE[{}]", size_of::<Sample>(), 240 - size_of::<Sample>()));
+        assert_eq!(h.dump(), format!("Blue[{}], FREE[{}]", mem::size_of::<Sample>(), 240 - mem::size_of::<Sample>()));
         h.retire_object(m3);
         assert_eq!(h.dump(), "FREE[240]");
     }
@@ -74,7 +75,7 @@ mod test_mwgc {
     #[test]
     fn mark_simple() {
         let mut data: [u8; 256] = [0; 256];
-        let mut h = Heap::new(Memory::take(&mut data));
+        let mut h = Heap::new(Memory::new(&mut data));
         let o1 = h.allocate_object::<Sample>().unwrap();
         let o2 = h.allocate_object::<Sample>().unwrap();
         let _o3 = h.allocate_object::<Sample>().unwrap();
@@ -110,7 +111,7 @@ mod test_mwgc {
     #[test]
     fn sweep_simple() {
         let mut data: [u8; 256] = [0; 256];
-        let mut h = Heap::new(Memory::take(&mut data));
+        let mut h = Heap::new(Memory::new(&mut data));
         let o1 = h.allocate_object::<Sample>().unwrap();
         let _o2 = h.allocate_object::<Sample>().unwrap();
         let o3 = h.allocate_object::<Sample>().unwrap();

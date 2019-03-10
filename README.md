@@ -1,10 +1,29 @@
 # micro-wibble garbage collector
 
-This is an attempt to make the tiniest possible garbage-collected heap, for embedded devices, in rust.
+A sesame-seed-sized garbage-collected heap, for tiny hardware.
 
 It's simple, _not_ thread safe, and efficient for allocations up to about 512 bytes.
 
+Here's an example of creating a 256-byte heap on the stack, using it to allocate two different objects, and then running the garbage collector to reap one of them:
+
+```rust
+use mwgc::{Heap, Memory};
+
+let mut data: [u8; 256] = [0; 256];
+let mut h = Heap::new(Memory::new(&mut data));
+let o1 = h.allocate_object::<Sample>().unwrap();
+let o2 = h.allocate_object::<Toaster>().unwrap();
+h.gc(&[ o1 ]);
+```
+
+
 ## usage
+
+
+
+## how it works
+
+
 
 Memory, Heap, allocate_object, gc
 single threaded only

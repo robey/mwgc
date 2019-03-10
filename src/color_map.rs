@@ -44,12 +44,12 @@ pub struct BlockRange {
 // color (blue, green, or gray) and is followed by zero or more blocks that
 // are marked as "continue".
 // (free memory is tracked separately on a sorted FreeList.)
-pub struct ColorMap {
-    bits: &'static mut [u8],
+pub struct ColorMap<'heap> {
+    bits: &'heap mut [u8],
 }
 
-impl ColorMap {
-    pub fn new(m: Memory) -> ColorMap {
+impl<'heap> ColorMap<'heap> {
+    pub fn new(m: Memory<'heap>) -> ColorMap<'heap> {
         let bits = m.inner();
         // mark whole area as "free" (check)
         for i in 0..bits.len() { bits[i] = 0xff }
@@ -96,7 +96,7 @@ impl ColorMap {
     }
 }
 
-impl fmt::Debug for ColorMap {
+impl<'heap> fmt::Debug for ColorMap<'heap> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ColorMap(")?;
         for i in 0..(self.bits.len() * 4) {
@@ -113,7 +113,7 @@ impl fmt::Debug for ColorMap {
 
 
 pub struct ColorMapIterator<'a> {
-    color_map: &'a ColorMap,
+    color_map: &'a ColorMap<'a>,
     current: usize,
 }
 
@@ -137,14 +137,14 @@ mod tests {
     #[test]
     fn init() {
         let mut data: [u8; 4] = [0; 4];
-        let map = ColorMap::new(Memory::take(&mut data));
+        let map = ColorMap::new(Memory::new(&mut data));
         assert_eq!(format!("{:?}", map), "ColorMap(CCCCCCCCCCCCCCCC)");
     }
 
     #[test]
     fn set_and_get_ranges() {
         let mut data: [u8; 4] = [0; 4];
-        let mut map = ColorMap::new(Memory::take(&mut data));
+        let mut map = ColorMap::new(Memory::new(&mut data));
         map.set_range(BlockRange { start: 0, end: 2, color: Color::Green });
         assert_eq!(format!("{:?}", map), "ColorMap(G.CCCCCCCCCCCCCC)");
         assert_eq!(map.get_range(0), BlockRange { start: 0, end: 2, color: Color::Green });

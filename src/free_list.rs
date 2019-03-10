@@ -7,14 +7,14 @@ use crate::memory::Memory;
 
 // a FreeBlockPtr has "interior mutability"
 #[derive(Clone, Copy)]
-pub struct FreeBlockPtr {
-    pub ptr: Option<&'static FreeBlock>,
+pub struct FreeBlockPtr<'heap> {
+    pub ptr: Option<&'heap FreeBlock<'heap>>,
 }
 
 const LAST: FreeBlockPtr = FreeBlockPtr { ptr: None };
 
-impl FreeBlockPtr {
-    pub fn new(m: Memory, next: FreeBlockPtr) -> FreeBlockPtr {
+impl<'heap> FreeBlockPtr<'heap> {
+    pub fn new(m: Memory<'heap>, next: FreeBlockPtr<'heap>) -> FreeBlockPtr<'heap> {
         let block = m.to_free_block(next);
         FreeBlockPtr { ptr: Some(block) }
     }
@@ -31,12 +31,12 @@ impl FreeBlockPtr {
         self.ptr.map(|p| p.size)
     }
 
-    pub fn next(&self) -> Option<&FreeBlockPtr> {
+    pub fn next(&self) -> Option<&FreeBlockPtr<'heap>> {
         self.ptr.map(|p| &p.next)
     }
 
     // attempt to allocate memory out of this block.
-    pub fn allocate(&self, amount: usize) -> Option<Memory> {
+    pub fn allocate(&self, amount: usize) -> Option<Memory<'heap>> {
         let s = self.as_mut();
         s.ptr.and_then(|block| {
             if amount > block.size {
@@ -44,10 +44,10 @@ impl FreeBlockPtr {
             } else if block.size - amount < FREE_BLOCK_SIZE {
                 // if there isn't enough left in this block for a new block, just use it all.
                 s.ptr = block.next.ptr;
-                Some(block.as_mut().to_memory())
+                Some(Memory::from_free_block(block.as_mut()))
             } else {
                 // split off a new alloc
-                let (a1, a2) = block.as_mut().to_memory().split_at(amount);
+                let (a1, a2) = Memory::from_free_block(block.as_mut()).split_at(amount);
                 s.ptr = Some(a2.to_free_block(block.next));
                 Some(a1)
             }
@@ -57,7 +57,7 @@ impl FreeBlockPtr {
     // the inserts will consume the memory if it was successfully inserted,
     // or return it if this isn't the right place.
 
-    pub fn try_insert_before(&self, m: Memory) -> Option<Memory> {
+    pub fn try_insert_before(&self, m: Memory<'heap>) -> Option<Memory<'heap>> {
         let s = self.as_mut();
         if let Some(block) = s.ptr.as_mut() {
             if block.start() > m.start() {
@@ -71,7 +71,7 @@ impl FreeBlockPtr {
         Some(m)
     }
 
-    pub fn try_insert_after(&self, m: Memory) -> Option<Memory> {
+    pub fn try_insert_after(&self, m: Memory<'heap>) -> Option<Memory<'heap>> {
         let s = self.as_mut();
         match s.ptr.as_mut() {
             None => {
@@ -92,36 +92,31 @@ impl FreeBlockPtr {
         }
     }
 
-    pub fn try_insert(&self, m: Memory) -> Option<Memory> {
+    pub fn try_insert(&self, m: Memory<'heap>) -> Option<Memory<'heap>> {
         self.try_insert_before(m).and_then(|m| self.try_insert_after(m))
     }
 
     // for internal mutations only
-    fn as_mut(&self) -> &mut FreeBlockPtr {
+    fn as_mut(&self) -> &mut FreeBlockPtr<'heap> {
         unsafe { &mut *(self as *const FreeBlockPtr as *mut FreeBlockPtr) }
     }
 }
 
-impl fmt::Debug for FreeBlockPtr {
+impl<'heap> fmt::Debug for FreeBlockPtr<'heap> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self.ptr)
     }
 }
 
 
-pub struct FreeBlock {
-    pub next: FreeBlockPtr,
+pub struct FreeBlock<'heap> {
+    pub next: FreeBlockPtr<'heap>,
     pub size: usize,
 }
 
 pub const FREE_BLOCK_SIZE: usize = mem::size_of::<FreeBlock>();
 
-impl FreeBlock {
-    // presto-chango back to usable memory!
-    fn to_memory(&mut self) -> Memory {
-        Memory::make(self, self.size)
-    }
-
+impl<'heap> FreeBlock<'heap> {
     // for internal mutations only
     fn as_mut(&self) -> &mut FreeBlock {
         unsafe { &mut *(self as *const FreeBlock as *mut FreeBlock) }
@@ -148,7 +143,7 @@ impl FreeBlock {
     }
 }
 
-impl fmt::Debug for FreeBlock {
+impl<'heap> fmt::Debug for FreeBlock<'heap> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} @ {:?}", self.size, self as *const _)
     }
@@ -156,11 +151,11 @@ impl fmt::Debug for FreeBlock {
 
 
 pub struct FreeListIterator<'a> {
-    next: &'a FreeBlockPtr,
+    next: &'a FreeBlockPtr<'a>,
 }
 
 impl<'a> Iterator for FreeListIterator<'a> {
-    type Item = &'a FreeBlock;
+    type Item = &'a FreeBlock<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next.ptr.map(|block| {
@@ -176,8 +171,8 @@ impl<'a> Iterator for FreeListIterator<'a> {
 // in the free list, we remember the previous pointer as we go.
 #[derive(Clone, Copy)]
 pub struct FreeListSpan<'a> {
-    pub insert_point: &'a FreeBlockPtr,
-    pub ptr: &'a FreeBlockPtr,
+    pub insert_point: &'a FreeBlockPtr<'a>,
+    pub ptr: &'a FreeBlockPtr<'a>,
 }
 
 impl<'a> FreeListSpan<'a> {
@@ -187,7 +182,7 @@ impl<'a> FreeListSpan<'a> {
 
     // if you know for sure the memory will slot between these two free
     // blocks (in this span), we can do it O(1).
-    pub fn insert(&self, m: Memory) {
+    pub fn insert(&self, m: Memory<'a>) {
         assert!(self.insert_point.try_insert_after(m).and_then(|m| self.ptr.try_insert_before(m)).is_none());
     }
 
@@ -205,7 +200,7 @@ pub struct FreeListSpanIterator<'a> {
 }
 
 impl<'a> FreeListSpanIterator<'a> {
-    fn new(p: &'a FreeBlockPtr) -> FreeListSpanIterator<'a> {
+    fn new(p: &'a FreeBlockPtr<'a>) -> FreeListSpanIterator<'a> {
         FreeListSpanIterator { next: Some(FreeListSpan::new(p)) }
     }
 }
@@ -221,12 +216,12 @@ impl<'a> Iterator for FreeListSpanIterator<'a> {
 }
 
 
-pub struct FreeList {
-    list: FreeBlockPtr,
+pub struct FreeList<'heap> {
+    list: FreeBlockPtr<'heap>,
 }
 
-impl FreeList {
-    pub fn new(m: Memory) -> FreeList {
+impl<'heap> FreeList<'heap> {
+    pub fn new(m: Memory<'heap>) -> FreeList<'heap> {
         FreeList { list: FreeBlockPtr::new(m, LAST) }
     }
 
@@ -238,8 +233,9 @@ impl FreeList {
     // which will be the previous FreeBlockPtr or the initial one. the final
     // FreeBlockPtr will be a null pointer, so at least one FreeBlockPtr is
     // always yielded, even for an empty list.
-    pub fn iter_span(&self) -> FreeListSpanIterator {
-        FreeListSpanIterator::new(&self.list)
+    pub fn iter_span(&self) -> FreeListSpanIterator<'heap> {
+        // FIXME: rust can't figure out that we're all "heap"-lifetime references
+        FreeListSpanIterator::new(unsafe { mem::transmute(&self.list) })
     }
 
     pub fn first(&self) -> FreeBlockPtr {
@@ -265,11 +261,11 @@ impl FreeList {
         self.iter_span().map(|s| s.ptr.size().unwrap_or(0)).collect::<Vec<usize>>()
     }
 
-    pub fn allocate(&mut self, amount: usize) -> Option<Memory> {
+    pub fn allocate(&mut self, amount: usize) -> Option<Memory<'heap>> {
         self.iter_span().find_map(|p| p.ptr.allocate(amount))
     }
 
-    pub fn retire(&mut self, m: Memory) {
+    pub fn retire(&mut self, m: Memory<'heap>) {
         // try_insert will return the memory if it won't fit here, so we
         // do some ✨shenanigans✨ to move the memory thru an option, so
         // rust will be satisfied.
@@ -281,7 +277,7 @@ impl FreeList {
     }
 }
 
-impl fmt::Debug for FreeList {
+impl<'heap> fmt::Debug for FreeList<'heap> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "FreeList({})", self.iter().map(|block| {
             format!("{:?}", block)
@@ -297,9 +293,10 @@ mod tests {
     #[test]
     fn allocate() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Memory::take(&mut data));
+        let start = &data as *const u8;
+        let mut f = FreeList::new(Memory::new(&mut data));
         let origin = f.first_available();
-        assert_eq!(origin, &data as *const u8);
+        assert_eq!(origin, start);
         let alloc = f.allocate(120);
         assert!(alloc.is_some());
         if let Some(m) = alloc {
@@ -311,7 +308,7 @@ mod tests {
     #[test]
     fn allocate_multiple() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Memory::take(&mut data));
+        let mut f = FreeList::new(Memory::new(&mut data));
         let origin = f.first_available();
         let m1 = f.allocate(64).unwrap();
         let m2 = f.allocate(32).unwrap();
@@ -325,7 +322,7 @@ mod tests {
     #[test]
     fn allocate_to_exhaustion() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Memory::take(&mut data));
+        let mut f = FreeList::new(Memory::new(&mut data));
         let first_addr = f.first_available();
         let m1 = f.allocate(128).unwrap();
         let m2 = f.allocate(128).unwrap();
@@ -340,7 +337,7 @@ mod tests {
     #[test]
     fn retire_first() {
         let mut data: [u8; 256] = [0; 256];
-        let mut f = FreeList::new(Memory::take(&mut data));
+        let mut f = FreeList::new(Memory::new(&mut data));
         let origin = f.first_available();
         let m1 = f.allocate(64);
         assert!(m1.is_some());
@@ -357,7 +354,7 @@ mod tests {
     #[test]
     fn retire_last() {
         let mut data: [u8; 256] = [0; 256];
-        let (m1, m2) = Memory::take(&mut data).split_at(128);
+        let (m1, m2) = Memory::new(&mut data).split_at(128);
         let (_, m4) = m2.split_at(64);
 
         let mut f = FreeList::new(m1);
@@ -371,7 +368,7 @@ mod tests {
     #[test]
     fn retire_middle() {
         let mut data: [u8; 256] = [0; 256];
-        let (m1, m2) = Memory::take(&mut data).split_at(128);
+        let (m1, m2) = Memory::new(&mut data).split_at(128);
         let (m3, m4) = m2.split_at(64);
 
         let mut f = FreeList::new(m1);
