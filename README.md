@@ -1,4 +1,18 @@
+# micro-wibble garbage collector
 
+This is an attempt to make the tiniest possible garbage-collected heap, for embedded devices, in rust.
+
+It's simple, _not_ thread safe, and efficient for allocations up to about 512 bytes.
+
+## usage
+
+Memory, Heap, allocate_object, gc
+single threaded only
+very dumb/simple
+
+```rust
+
+```
 
 ## stages
 

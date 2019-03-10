@@ -3,6 +3,8 @@ mod test_mwgc {
     use core::mem::size_of;
     use mwgc::{Heap, Memory};
 
+    static mut DATA: [u8; 256] = [0; 256];
+
     // used to test the GC
     struct Sample {
         p: *const Sample,
@@ -36,6 +38,19 @@ mod test_mwgc {
         if let Some(m) = alloc {
             assert_eq!(m.len(), 32);
             assert_eq!(h.dump(), "Blue[32], FREE[208]");
+        }
+    }
+
+    #[test]
+    fn allocate_array() {
+        let mut data: [u8; 256] = [0; 256];
+        let mut h = Heap::new(Memory::take(&mut data));
+        let array = h.allocate_array::<u32>(10);
+        assert!(array.is_some());
+        if let Some(a) = array {
+            assert_eq!(a.len(), 10);
+            // multiple of 16:
+            assert_eq!(h.dump(), "Blue[48], FREE[192]");
         }
     }
 
@@ -75,7 +90,7 @@ mod test_mwgc {
         o4.p = 455 as *const Sample;
         o5.number = 23;
 
-        h.mark_start(&[ o1.ptr() ]);
+        h.mark_start(&[ o1 ]);
         assert_eq!(h.get_mark_range(), (o1.ptr(), o1.ptr()));
         assert_eq!(h.dump_spans(), "Check, Blue, Blue, Blue, Blue, FREE");
 
@@ -104,15 +119,30 @@ mod test_mwgc {
         assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, Blue, FREE");
 
         o1.p = o3 as *const Sample;
-        h.mark(&[ o1.ptr() ]);
+        h.mark(&[ o1 ]);
         assert_eq!(h.dump_spans(), "Green, Blue, Green, Blue, Blue, FREE");
         h.sweep();
         assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
 
         o1.p = core::ptr::null();
-        h.mark(&[ o1.ptr() ]);
+        h.mark(&[ o1 ]);
         assert_eq!(h.dump_spans(), "Blue, FREE, Green, FREE");
         h.sweep();
         assert_eq!(h.dump_spans(), "Blue, FREE");
+    }
+
+    #[test]
+    fn api() {
+        let mut h = Heap::new(Memory::new(unsafe { &mut DATA }));
+        let o1 = h.allocate_object::<Sample>().unwrap();
+        let _o2 = h.allocate_object::<Sample>().unwrap();
+        let o3 = h.allocate_object::<Sample>().unwrap();
+        let o4 = h.allocate_object::<Sample>().unwrap();
+        let _o5 = h.allocate_object::<Sample>().unwrap();
+        o1.p = o3 as *const Sample;
+        o3.number = (o4.ptr() as usize) + 1;
+
+        h.gc(&[ o1 ]);
+        assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
     }
 }

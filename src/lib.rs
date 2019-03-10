@@ -1,6 +1,4 @@
-use core::fmt;
-use core::mem;
-use core::ptr;
+use core::{fmt, mem, ptr, slice};
 
 #[macro_use]
 extern crate static_assertions;
@@ -14,15 +12,9 @@ pub use self::free_list::{FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, F
 pub use self::memory::{Memory};
 
 
-/// configurable things:
 /// how many bytes are in each block of memory?
+/// smaller means more overhead wasted for tracking memory. larger means more wasted memory.
 const BLOCK_SIZE_BYTES: usize = 16;
-
-// const WORD_SIZE_BYTES: usize = size_of::<usize>();
-// const WORD_SIZE_BITS: usize = WORD_SIZE_BYTES * 8;
-
-// const BLOCK_SIZE_WORDS: usize = BLOCK_SIZE_BYTES / WORD_SIZE_BYTES;
-
 
 // block size must be big enough to hold linking info for the free list.
 const_assert!(block_size; BLOCK_SIZE_BYTES >= FREE_BLOCK_SIZE);
@@ -90,6 +82,56 @@ impl<'a> fmt::Debug for HeapSpan<'a> {
         } else {
             write!(f, "{:?}[{}]", self.span_type, (self.end as usize) - (self.start as usize))
         }
+    }
+}
+
+
+pub struct HeapIterator<'a> {
+    heap: &'a Heap,
+    free_list_span: FreeListSpan<'a>,
+    current: *const u8,
+}
+
+impl<'a> HeapIterator<'a> {
+    fn new(heap: &'a Heap) -> HeapIterator<'a> {
+        // there is always at least one span, because the final null pointer
+        // is yielded. we stop calling `next()` at that point, so we never
+        // get to the `None` end of the iteration.
+        let free_list_span = heap.free_list.iter_span().next().unwrap();
+        HeapIterator { heap, free_list_span, current: heap.start }
+    }
+}
+
+impl<'a> Iterator for HeapIterator<'a> {
+    type Item = HeapSpan<'a>;
+
+    // tricky: there are two lists to traverse in tandem. if the current
+    // pointer is the next in the free list, that takes precedence.
+    // otherwise, use the block map.
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current >= self.heap.end { return None }
+
+        if let Some(free) = self.free_list_span.ptr.ptr {
+            // did they insert a new free item behind us when we gave out the last span?
+            if free.start() < self.current {
+                self.free_list_span = self.free_list_span.next().unwrap();
+                return self.next();
+            }
+
+            if free.start() == self.current {
+                let free_span: FreeListSpan<'a> = self.free_list_span;
+                // there is always at least one span, because the final null pointer
+                // is yielded. we stop calling `next()` at that point, so we never
+                // get to the `None` end of the iteration.
+                self.free_list_span = free_span.next().unwrap();
+                self.current = free.end();
+                return Some(HeapSpan::from_free_block(free, free_span));
+            }
+        }
+
+        let span = self.heap.get_range(self.current);
+        self.current = self.heap.address_of(span.end);
+        Some(HeapSpan::from_block_range(self.heap, span, self.free_list_span))
     }
 }
 
@@ -169,7 +211,13 @@ impl Heap {
     }
 
     pub fn allocate_object<T>(&mut self) -> Option<&'static mut T> {
-        self.allocate(mem::size_of::<T>()).map(|m| unsafe { mem::transmute(m.inner().as_mut_ptr()) } )
+        self.allocate(mem::size_of::<T>()).map(|m| unsafe { mem::transmute(m.inner().as_mut_ptr()) })
+    }
+
+    pub fn allocate_array<T>(&mut self, count: usize) -> Option<&[T]> {
+        self.allocate(mem::size_of::<T>() * count).map(|m| unsafe {
+            slice::from_raw_parts(mem::transmute(m.inner().as_mut_ptr()), count)
+        })
     }
 
     // give back an allocation without waiting for a GC round.
@@ -187,11 +235,11 @@ impl Heap {
     }
 
     // set up a mark phase, starting from these roots.
-    pub fn mark_start(&mut self, roots: &[*const u8]) {
+    pub fn mark_start<T>(&mut self, roots: &[&T]) {
         self.check_start = ptr::null();
         self.check_end = ptr::null();
         self.current_color = self.current_color.opposite();
-        for r in roots { self.check(*r) }
+        for r in roots { self.check(*r as *const T as *const u8) }
     }
 
     // do one "round" of marking. if we're done after this round, returns
@@ -226,7 +274,7 @@ impl Heap {
     }
 
     // do the entire mark phase.
-    pub fn mark(&mut self, roots: &[*const u8]) {
+    pub fn mark<T>(&mut self, roots: &[&T]) {
         self.mark_start(roots);
         while !self.mark_round() {}
     }
@@ -258,6 +306,12 @@ impl Heap {
         });
     }
 
+    // do an entire GC round
+    pub fn gc<T>(&mut self, roots: &[&T]) {
+        self.mark(roots);
+        self.sweep();
+    }
+
     fn iter(&self) -> HeapIterator {
         HeapIterator::new(self)
     }
@@ -280,55 +334,5 @@ impl fmt::Debug for Heap {
             write!(f, "{:?}, {:?}", self.color_map, self.free_list)?;
         }
         write!(f, ")")
-    }
-}
-
-
-pub struct HeapIterator<'a> {
-    heap: &'a Heap,
-    free_list_span: FreeListSpan<'a>,
-    current: *const u8,
-}
-
-impl<'a> HeapIterator<'a> {
-    fn new(heap: &'a Heap) -> HeapIterator<'a> {
-        // there is always at least one span, because the final null pointer
-        // is yielded. we stop calling `next()` at that point, so we never
-        // get to the `None` end of the iteration.
-        let free_list_span = heap.free_list.iter_span().next().unwrap();
-        HeapIterator { heap, free_list_span, current: heap.start }
-    }
-}
-
-impl<'a> Iterator for HeapIterator<'a> {
-    type Item = HeapSpan<'a>;
-
-    // tricky: there are two lists to traverse in tandem. if the current
-    // pointer is the next in the free list, that takes precedence.
-    // otherwise, use the block map.
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current >= self.heap.end { return None }
-
-        if let Some(free) = self.free_list_span.ptr.ptr {
-            // did they insert a new free item behind us when we gave out the last span?
-            if free.start() < self.current {
-                self.free_list_span = self.free_list_span.next().unwrap();
-                return self.next();
-            }
-
-            if free.start() == self.current {
-                let free_span: FreeListSpan<'a> = self.free_list_span;
-                // there is always at least one span, because the final null pointer
-                // is yielded. we stop calling `next()` at that point, so we never
-                // get to the `None` end of the iteration.
-                self.free_list_span = free_span.next().unwrap();
-                self.current = free.end();
-                return Some(HeapSpan::from_free_block(free, free_span));
-            }
-        }
-
-        let span = self.heap.get_range(self.current);
-        self.current = self.heap.address_of(span.end);
-        Some(HeapSpan::from_block_range(self.heap, span, self.free_list_span))
     }
 }
