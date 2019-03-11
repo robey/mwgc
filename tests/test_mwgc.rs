@@ -146,8 +146,14 @@ mod test_mwgc {
         let _o5 = h.allocate_object::<Sample>().unwrap();
         o1.p = o3 as *const Sample;
         o3.number = (o4.ptr() as usize) + 1;
+        let stats = h.get_stats();
+        assert_eq!(stats.total_bytes, 240);
+        assert_eq!(stats.free_bytes, 240 - 5 * mem::size_of::<Sample>());
 
         h.gc(&[ o1 ]);
         assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
+        let stats2 = h.get_stats();
+        assert_eq!(stats2.total_bytes, 240);
+        assert_eq!(stats2.free_bytes, 240 - 2 * mem::size_of::<Sample>());
     }
 }

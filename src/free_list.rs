@@ -275,6 +275,10 @@ impl<'heap> FreeList<'heap> {
             mm.is_none()
         }));
     }
+
+    pub fn bytes(&self) -> usize {
+        self.iter().map(|b| b.size).sum()
+    }
 }
 
 impl<'heap> fmt::Debug for FreeList<'heap> {

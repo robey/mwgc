@@ -136,6 +136,11 @@ impl<'a> Iterator for HeapIterator<'a> {
 }
 
 
+pub struct HeapStats {
+    pub total_bytes: usize,
+    pub free_bytes: usize,
+}
+
 // 9 words
 pub struct Heap<'heap> {
     pub start: *const u8,
@@ -175,7 +180,7 @@ impl<'heap> Heap<'heap> {
         }
     }
 
-    pub fn from_bytes(bytes: &'heap mut [u8]) -> Heap {
+    pub fn from_bytes(bytes: &'heap mut [u8]) -> Heap<'heap> {
         Heap::new(Memory::new(bytes))
     }
 
@@ -334,6 +339,10 @@ impl<'heap> Heap<'heap> {
 
     pub fn dump_spans(&self) -> String {
         self.iter().map(|span| { format!("{:?}", span.span_type) }).collect::<Vec<String>>().join(", ")
+    }
+
+    pub fn get_stats(&self) -> HeapStats {
+        HeapStats { total_bytes: self.blocks * BLOCK_SIZE_BYTES, free_bytes: self.free_list.bytes() }
     }
 }
 
