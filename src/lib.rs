@@ -200,7 +200,9 @@ impl<'heap> Heap<'heap> {
 
     #[inline]
     fn block_of(&self, p: *const u8) -> usize {
-        ((p as usize) - (self.start as usize)) / BLOCK_SIZE_BYTES
+        let mut b = ((p as usize) - (self.start as usize)) / BLOCK_SIZE_BYTES;
+        while self.color_map.get(b) == Color::Continue { b -= 1 }
+        b
     }
 
     #[inline]
@@ -211,7 +213,7 @@ impl<'heap> Heap<'heap> {
     }
 
     fn is_block(&self, p: *const u8) -> bool {
-        p >= self.start && p < self.end && ((p as usize) - (self.start as usize)) % BLOCK_SIZE_BYTES == 0
+        p >= self.start && p < self.end && (p as usize) % mem::size_of::<usize>() == 0
     }
 
     fn get_range(&self, p: *const u8) -> BlockRange {
@@ -257,7 +259,7 @@ impl<'heap> Heap<'heap> {
     }
 
     // give back an allocation without waiting for a GC round.
-    pub fn retire_object<T>(&mut self, obj: &mut T) {
+    pub fn retire_object<T>(&mut self, obj: &'heap mut T) {
         let range = self.get_range(obj as *mut T as *const T as *const u8);
         let m = Memory::from_addresses(self.address_of(range.start), self.address_of(range.end));
         self.color_map.free_range(range);

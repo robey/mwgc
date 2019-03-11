@@ -3,7 +3,12 @@ mod test_mwgc {
     use core::mem;
     use mwgc::{Heap, Memory};
 
-    static mut DATA: [u8; 256] = [0; 256];
+    #[repr(align(8))]
+    struct Blob {
+        data: [u8; 256]
+    }
+
+    static mut DATA: Blob = Blob { data: [0; 256] };
 
     // used to test the GC
     #[derive(Default)]
@@ -168,8 +173,24 @@ mod test_mwgc {
     }
 
     #[test]
+    fn inner_pointer() {
+        let mut data: [u8; 256] = [0; 256];
+        let mut h = Heap::new(Memory::new(&mut data));
+
+        // start with o1 -> o2 -> o3.
+        let o1 = h.allocate_object::<Sample>().unwrap();
+        let _o2 = h.allocate_object::<Sample>().unwrap();
+        let o3 = h.allocate_object::<Sample>().unwrap();
+        let inside_o3 = unsafe { &*(((o3 as *const Sample as usize) + mem::size_of::<usize>() * 2) as *const Sample) };
+        o1.p = Some(inside_o3);
+
+        h.gc(&[ o1 ]);
+        assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
+    }
+
+    #[test]
     fn api() {
-        let mut h = Heap::new(Memory::new(unsafe { &mut DATA }));
+        let mut h = Heap::new(Memory::new(unsafe { &mut DATA.data }));
         let o1 = h.allocate_object::<Sample>().unwrap();
         let _o2 = h.allocate_object::<Sample>().unwrap();
         let o3 = h.allocate_object::<Sample>().unwrap();
