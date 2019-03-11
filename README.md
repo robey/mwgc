@@ -59,44 +59,25 @@ There is also a function for the curious, which reports heap stats (total number
 
 - `pub fn get_stats(&self) -> HeapStats`
 
-
-## How it works
-
-The heap is organized into 16-byte (configurable via compile-time constant) blocks. Each block has a 2-bit "color" in a bitmap carved out of the end of the heap region, at a cost of about 2% overhead. One "color" is used to mark continuations of contiguous spans, so each allocation can be identified by a color followed by one or more "continue" markers. The other 3 colors correspond to the white, gray, and black colors of tri-color marking, although I've chosen to call them blue, green, and "check".
-
-
 There is a fair amount of `unsafe` code in this library. I've tried to isolate most of it into a few helper functions, but the concept of a garbage collected heap allows and requires several features that rust's borrow checker is explicitly designed to prevent. :)
 
 
+## How it works
+
+The heap is organized into allocatable blocks, with a small region reserved as a bitmap. The block size is configured by a compile-time constant, using a default of 16 bytes. Each block has a 2-bit "color" in the bitmap, at a cost of about 2% overhead. One "color" is used to mark continuations of contiguous spans, so each allocation can be identified by a color followed by one or more "continue" markers. The other 3 colors correspond to the white, gray, and black colors of tri-color marking, although I've chosen to call them blue, green, and "check".
+
+Separately, a sorted free list is maintained by storing a "next" link and size in each free block. This consumes 8 bytes on a 32-bit system, limiting the minimum block size.
+
+At startup, live memory is marked as blue. During GC, the mark phase will mark all live spans as green, and the sweep phase will add the remaining blue spans into the free list. For the next GC, the colors will be reversed, with live objects being marked as blue again.
+
+Marking a span causes its color to change to "check". The heap tracks the start and end range of spans that have been marked, so each `mark_round` call traverses that range, looking for words that are aligned and appear to point within the heap. Any such spans are colored "check" and added to the new range. In this way, each round is approximately one level deeper into the object graph, although it may jump ahead if the links are in increasing order.
 
 
+## License
 
-## stages
+Apache 2 (open-source) license, included in `LICENSE.txt`.
 
-- quiescent (GC isn't running)
-    - current state: blue or green
-    - new allocs: mark with current state
 
-- mark
-    - current state: blue or green; "next color" is the other color
-    - new allocs: mark as "next color" (grey?)
-    - there are no "hidden references": all live object references must be on the stack (and therefore accessed via roots)
-    - algorithm:
-        1. track "current range" (initially empty). as items are marked, if they are outside the range, expand it.
-        2. mark all roots as gray.
-        3. walk the current range. for each gray:
-            1. mark the children gray.
-            2. mark the object "next color".
-            3. if the cursor is the same as the range start, move the range start to follow the cursor.
-        4. if the range is not empty, repeat 3.
+## Authors
 
-- sweep
-    - current state: blue or green, the opposite color ("next color") from the mark stage
-    - new allocs: mark with current state
-    - algorithm:
-        1. walk the entire range. add any "old color" block to the free list.
-
-## problem
-
-- when marking, we only have a pointer, but we need to find the extent of the allocation.
-- maybe mark all free space with a run of blue/green/check (anything but "cont") so that we can find the end of an allocation by scanning forward in the colormap?
+- Robey Pointer <robeypointer@gmail.com> / @robey@mastodon.technology / github @robey
