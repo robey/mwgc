@@ -6,21 +6,18 @@ mod test_mwgc {
     static mut DATA: [u8; 256] = [0; 256];
 
     // used to test the GC
-    struct Sample {
-        p: *const Sample,
+    #[derive(Default)]
+    struct Sample<'a> {
+        p: Option<&'a Sample<'a>>,
         number: usize,
-        next: *const Sample,
-        prev: *const Sample,
+        next: Option<&'a Sample<'a>>,
+        prev: Option<&'a Sample<'a>>,
     }
 
-    impl Sample {
+    impl<'a> Sample<'a> {
         pub fn ptr(&self) -> *const u8 {
             self as *const Sample as *const u8
         }
-    }
-
-    impl Default for Sample {
-        fn default() -> Self { Sample { p: ptr::null(), number: 0, next: ptr::null(), prev: ptr::null() } }
     }
 
 
@@ -88,12 +85,12 @@ mod test_mwgc {
         assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, Blue, FREE");
 
         // leave o3 stranded. make o1 point to o2, which points to o4, o5, and back to o1.
-        o1.p = o2 as *const Sample;
-        o2.p = o4 as *const Sample;
-        o2.next = o5 as *const Sample;
-        o2.prev = o1 as *const Sample;
-        o4.p = 455 as *const Sample;
+        o4.p = Some(unsafe { &*(455 as *const Sample) });
         o5.number = 23;
+        o2.p = Some(o4);
+        o2.next = Some(o5);
+        o2.prev = Some(unsafe { &*(o1 as *const Sample) });  // trick rust into making a circ ref
+        o1.p = Some(o2);
 
         h.mark_start(&[ o1 ]);
         assert_eq!(h.get_mark_range(), (o1.ptr(), o1.ptr()));
@@ -123,17 +120,52 @@ mod test_mwgc {
         let _o5 = h.allocate_object::<Sample>().unwrap();
         assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, Blue, FREE");
 
-        o1.p = o3 as *const Sample;
+        o1.p = Some(o3);
         h.mark(&[ o1 ]);
         assert_eq!(h.dump_spans(), "Green, Blue, Green, Blue, Blue, FREE");
         h.sweep();
         assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
 
-        o1.p = core::ptr::null();
+        o1.p = None;
         h.mark(&[ o1 ]);
         assert_eq!(h.dump_spans(), "Blue, FREE, Green, FREE");
         h.sweep();
         assert_eq!(h.dump_spans(), "Blue, FREE");
+    }
+
+    #[test]
+    fn alloc_during_collection() {
+        let mut data: [u8; 256] = [0; 256];
+        let mut h = Heap::new(Memory::new(&mut data));
+
+        // start with o1 -> o2 -> o3.
+        let o1 = h.allocate_object::<Sample>().unwrap();
+        let o2 = h.allocate_object::<Sample>().unwrap();
+        let o3 = h.allocate_object::<Sample>().unwrap();
+        o2.p = Some(o3);
+        o1.p = Some(o2);
+
+        h.mark_start(&[ o1 ]);
+        assert_eq!(h.dump_spans(), "Check, Blue, Blue, FREE");
+
+        assert_eq!(h.mark_round(), false);
+        assert_eq!(h.dump_spans(), "Green, Check, Blue, FREE");
+
+        // o1 is saved, o2 will be checked on the next round. so, let's
+        // allocate an o4, and move the links to be: o2 -> o4 -> o3.
+        let o4 = h.allocate_object::<Sample>().unwrap();
+        assert_eq!(h.dump_spans(), "Green, Check, Blue, Green, FREE");
+        o4.p = Some(o3);
+        let o2 = o1.p.take().unwrap();
+        let o2_mut = unsafe { &mut *(o2 as *const Sample as *mut Sample) };
+        o2_mut.p = Some(o4);
+
+        // assert_eq!(h.mark_round(), true);
+        h.mark_round();
+        assert_eq!(h.dump_spans(), "Green, Green, Blue, Green, FREE");
+
+        // let _o5 = h.allocate_object::<Sample>().unwrap();
+
     }
 
     #[test]
@@ -144,8 +176,8 @@ mod test_mwgc {
         let o3 = h.allocate_object::<Sample>().unwrap();
         let o4 = h.allocate_object::<Sample>().unwrap();
         let _o5 = h.allocate_object::<Sample>().unwrap();
-        o1.p = o3 as *const Sample;
         o3.number = (o4.ptr() as usize) + 1;
+        o1.p = Some(o3);
         let stats = h.get_stats();
         assert_eq!(stats.total_bytes, 240);
         assert_eq!(stats.free_bytes, 240 - 5 * mem::size_of::<Sample>());
