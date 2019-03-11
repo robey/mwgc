@@ -1,8 +1,8 @@
 # micro-wibble garbage collector
 
-A sesame-seed-sized garbage-collected heap, for tiny hardware.
+A sesame-seed-sized heap with a tri-color, tracing, conservative, incremental, _non_-compacting garbage collector, for implementing a tiny language on tiny hardware.
 
-It's simple, _not_ thread safe, and efficient for allocations up to about 512 bytes.
+It's simple, _not_ thread safe, and efficient for allocations up to about 512 bytes and heaps under about 1MB.
 
 Here's an example of creating a 256-byte heap on the stack, using it to allocate two different objects, and then running the garbage collector to reap one of them:
 
@@ -17,7 +17,7 @@ h.gc(&[ o1 ]);
 ```
 
 
-## usage
+## Usage
 
 The `Heap` takes ownership of a block of `Memory` (which is a wrapper for a mutable byte slice `&mut [u8]`), and hands out chunks of it on demand.
 
@@ -50,24 +50,26 @@ The mark phase can also be broken down into steps. The first step only marks obj
 
 **Important**: You can allocate new objects between each step of garbage collection, but all "live" references must be reachable from the roots each time you call the next step.
 
+You can "proactively" retire memory back into the heap if you want, although it's a little less efficient than letting the garbage collector run, because of some amortized work in the GC.
+
+- `pub fn retire(&mut self, m: Memory<'heap>)`
+- `pub fn retire_object<T>(&mut self, obj: &'heap mut T)`
+
+There is also a function for the curious, which reports heap stats (total number of bytes, and total bytes free).
+
+- `pub fn get_stats(&self) -> HeapStats`
+
+
+## How it works
+
+The heap is organized into 16-byte (configurable via compile-time constant) blocks. Each block has a 2-bit "color" in a bitmap carved out of the end of the heap region, at a cost of about 2% overhead. One "color" is used to mark continuations of contiguous spans, so each allocation can be identified by a color followed by one or more "continue" markers. The other 3 colors correspond to the white, gray, and black colors of tri-color marking, although I've chosen to call them blue, green, and "check".
+
+
+There is a fair amount of `unsafe` code in this library. I've tried to isolate most of it into a few helper functions, but the concept of a garbage collected heap allows and requires several features that rust's borrow checker is explicitly designed to prevent. :)
 
 
 
-free manually
 
-    pub fn get_stats(&self) -> HeapStats
-
-
-## how it works
-
-
-
-
-follow references conservatively
-
-```rust
-
-```
 
 ## stages
 
