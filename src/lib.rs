@@ -1,16 +1,36 @@
+//! A sesame-seed-sized heap with a tri-color, tracing, conservative,
+//! incremental, _non_-compacting garbage collector, for implementing a tiny
+//! language on tiny hardware.
+//!
+//! It's simple, _not_ thread safe, and efficient for allocations up to about
+//! 512 bytes and heaps under about 1MB.
+//!
+//! Here's an example of creating a 256-byte heap on the stack, using it to
+//! allocate two different objects, and then running the garbage collector to
+//! reap one of them:
+//!
+//! ```rust
+//! use mwgc::Heap;
+//!
+//! let mut data: [u8; 256] = [0; 256];
+//! let mut h = Heap::from_bytes(&mut data);
+//! let o1 = h.allocate_object::<Bread>().unwrap();
+//! let o2 = h.allocate_object::<Toaster>().unwrap();
+//! h.gc(&[ o1 ]);
+//! ```
+
 use core::{fmt, mem, ptr, slice};
 
 #[macro_use]
 extern crate static_assertions;
 
-pub mod color_map;
-pub mod free_list;
-pub mod memory;
+mod color_map;
+mod free_list;
+mod memory;
 
-pub use self::color_map::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
-pub use self::free_list::{FreeBlock, FreeBlockPtr, FreeList, FreeListIterator, FreeListSpan, FREE_BLOCK_SIZE};
-pub use self::memory::{Memory};
-
+use self::color_map::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
+use self::free_list::{FreeBlock, FreeList, FreeListSpan, FREE_BLOCK_SIZE};
+pub use self::memory::Memory;
 
 /// how many bytes are in each block of memory?
 /// smaller means more overhead wasted for tracking memory. larger means more wasted memory.
@@ -37,7 +57,7 @@ fn ceil_to(n: usize, chunk: usize) -> usize {
 
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum SpanType {
+enum SpanType {
     Color(Color),
     Free
 }
@@ -53,7 +73,7 @@ impl fmt::Debug for SpanType {
 
 
 #[derive(Clone, Copy)]
-pub struct HeapSpan<'a> {
+struct HeapSpan<'a> {
     pub start: *const u8,
     pub end: *const u8,
     pub span_type: SpanType,
@@ -86,7 +106,7 @@ impl<'a> fmt::Debug for HeapSpan<'a> {
 }
 
 
-pub struct HeapIterator<'a> {
+struct HeapIterator<'a> {
     heap: &'a Heap<'a>,
     free_list_span: FreeListSpan<'a>,
     current: *const u8,
@@ -320,6 +340,17 @@ impl<'heap> Heap<'heap> {
     pub fn mark<T>(&mut self, roots: &[&T]) {
         self.mark_start(roots);
         while !self.mark_round() {}
+    }
+
+    // call me if you mutate an object while the mark phase is running.
+    // (forces a re-check even if we've already traversed this object)
+    pub fn mark_check<T>(&mut self, obj: &T) {
+        let p = obj as *const T as *const u8;
+        if self.is_block(p) {
+            let block = self.block_of(p);
+            self.color_map.set(block, Color::Check);
+            self.add_to_check_span(p);
+        }
     }
 
     fn check(&mut self, p: *const u8) {

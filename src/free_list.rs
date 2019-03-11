@@ -238,14 +238,6 @@ impl<'heap> FreeList<'heap> {
         FreeListSpanIterator::new(unsafe { mem::transmute(&self.list) })
     }
 
-    pub fn first(&self) -> FreeBlockPtr {
-        self.list
-    }
-
-    pub fn first_ref(&self) -> &FreeBlockPtr {
-        &self.list
-    }
-
     #[cfg(test)]
     fn first_available(&self) -> *const u8 {
         self.list.ptr.map(|block| block.start()).unwrap_or(core::ptr::null())

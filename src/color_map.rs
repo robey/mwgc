@@ -90,10 +90,6 @@ impl<'heap> ColorMap<'heap> {
     pub fn free_range(&mut self, range: BlockRange) {
         for i in (range.start)..(range.end) { self.set(i, Color::Check) }
     }
-
-    pub fn iter(&self) -> ColorMapIterator {
-        ColorMapIterator { color_map: self, current: 0 }
-    }
 }
 
 impl<'heap> fmt::Debug for ColorMap<'heap> {
@@ -108,23 +104,6 @@ impl<'heap> fmt::Debug for ColorMap<'heap> {
             })?;
         }
         write!(f, ")")
-    }
-}
-
-
-pub struct ColorMapIterator<'a> {
-    color_map: &'a ColorMap<'a>,
-    current: usize,
-}
-
-impl<'a> Iterator for ColorMapIterator<'a> {
-    type Item = BlockRange;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current >= self.color_map.len() { return None }
-        let range = self.color_map.get_range(self.current);
-        self.current = range.end;
-        Some(range)
     }
 }
 

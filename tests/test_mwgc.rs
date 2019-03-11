@@ -23,6 +23,10 @@ mod test_mwgc {
         pub fn ptr(&self) -> *const u8 {
             self as *const Sample as *const u8
         }
+
+        pub fn as_mut(&self) -> &'a mut Sample<'a> {
+            unsafe { &mut *(self as *const Sample as *mut Sample) }
+        }
     }
 
 
@@ -161,9 +165,8 @@ mod test_mwgc {
         let o4 = h.allocate_object::<Sample>().unwrap();
         assert_eq!(h.dump_spans(), "Green, Check, Blue, Check, FREE");
         o4.p = Some(o3);
-        let o2 = o1.p.take().unwrap();
-        let o2_mut = unsafe { &mut *(o2 as *const Sample as *mut Sample) };
-        o2_mut.p = Some(o4);
+        let o2 = o1.p.take().unwrap().as_mut();
+        o2.p = Some(o4);
 
         assert_eq!(h.mark_round(), false);
         assert_eq!(h.dump_spans(), "Green, Green, Check, Green, FREE");
@@ -177,7 +180,7 @@ mod test_mwgc {
         let mut data: [u8; 256] = [0; 256];
         let mut h = Heap::new(Memory::new(&mut data));
 
-        // start with o1 -> o2 -> o3.
+        // o1 points to inside o3.
         let o1 = h.allocate_object::<Sample>().unwrap();
         let _o2 = h.allocate_object::<Sample>().unwrap();
         let o3 = h.allocate_object::<Sample>().unwrap();
@@ -186,6 +189,39 @@ mod test_mwgc {
 
         h.gc(&[ o1 ]);
         assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
+    }
+
+    #[test]
+    fn ref_moves_backward() {
+        let mut data: [u8; 256] = [0; 256];
+        let mut h = Heap::new(Memory::new(&mut data));
+
+        // start with o1 -> o2 -> o3.
+        let o1 = h.allocate_object::<Sample>().unwrap();
+        let o2 = h.allocate_object::<Sample>().unwrap();
+        let o3 = h.allocate_object::<Sample>().unwrap();
+        o2.p = Some(o3);
+        o1.p = Some(o2);
+
+        h.mark_start(&[ o1 ]);
+        assert_eq!(h.dump_spans(), "Check, Blue, Blue, FREE");
+
+        assert_eq!(h.mark_round(), false);
+        assert_eq!(h.dump_spans(), "Green, Check, Blue, FREE");
+
+        // suddenly it's o1 -> o3 -> o2.
+        let o2 = o1.p.take().unwrap().as_mut();
+        let o3 = o2.p.take().unwrap().as_mut();
+        o3.p = Some(o2);
+        o1.p = Some(o3);
+        h.mark_check(o1);
+        assert_eq!(h.dump_spans(), "Check, Check, Blue, FREE");
+
+        assert_eq!(h.mark_round(), false);
+        assert_eq!(h.dump_spans(), "Green, Green, Check, FREE");
+
+        assert_eq!(h.mark_round(), true);
+        assert_eq!(h.dump_spans(), "Green, Green, Green, FREE");
     }
 
     #[test]

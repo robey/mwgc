@@ -7,11 +7,11 @@ It's simple, _not_ thread safe, and efficient for allocations up to about 512 by
 Here's an example of creating a 256-byte heap on the stack, using it to allocate two different objects, and then running the garbage collector to reap one of them:
 
 ```rust
-use mwgc::{Heap, Memory};
+use mwgc::Heap;
 
 let mut data: [u8; 256] = [0; 256];
 let mut h = Heap::from_bytes(&mut data);
-let o1 = h.allocate_object::<Sample>().unwrap();
+let o1 = h.allocate_object::<Bread>().unwrap();
 let o2 = h.allocate_object::<Toaster>().unwrap();
 h.gc(&[ o1 ]);
 ```
@@ -43,12 +43,15 @@ If you're worried about latency, you can also run the garbage collector as incre
 - `pub fn mark<T>(&mut self, roots: &[&T])`
 - `pub fn sweep(&mut self)`
 
+**Important**: You can allocate new objects between each step of garbage collection, but all "live" references must be reachable from the roots each time you call the next step.
+
 The mark phase can also be broken down into steps. The first step only marks objects directly accessible from the roots. Each later round goes one layer deeper into the tree of references. `mark_round` must be called until it returns `true`, which indicates that it's finished traversing every accessible object.
 
 - `pub fn mark_start<T>(&mut self, roots: &[&T])`
 - `pub fn mark_round(&mut self) -> bool`
+- `pub fn mark_check<T>(&mut self, obj: &T)`
 
-**Important**: You can allocate new objects between each step of garbage collection, but all "live" references must be reachable from the roots each time you call the next step.
+**Important**: If you modify any objects after `mark_start`, before `mark_round` returns `true`, you must notify the garbage collector to (re)check the object you modified by calling `mark_check`. This is the price of such fine granularity.
 
 You can "proactively" retire memory back into the heap if you want, although it's a little less efficient than letting the garbage collector run, because of some amortized work in the GC.
 
