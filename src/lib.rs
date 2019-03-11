@@ -141,14 +141,22 @@ pub struct HeapStats {
     pub free_bytes: usize,
 }
 
-// 9 words
+#[derive(PartialEq)]
+enum Phase {
+    QUIET, MARKING, MARKED
+}
+
+// this should be about 9 words of state (36 bytes on a 32-bit system)
 pub struct Heap<'heap> {
     pub start: *const u8,
     pub end: *const u8,
     blocks: usize,
     color_map: ColorMap<'heap>,
     free_list: FreeList<'heap>,
+
+    // gc state:
     pub current_color: Color,
+    phase: Phase,
 
     // for marking:
     check_start: *const u8,
@@ -175,6 +183,7 @@ impl<'heap> Heap<'heap> {
             color_map: ColorMap::new(color_data),
             free_list: FreeList::new(pool),
             current_color: Color::Blue,
+            phase: Phase::QUIET,
             check_start: ptr::null(),
             check_end: ptr::null(),
         }
@@ -211,7 +220,11 @@ impl<'heap> Heap<'heap> {
 
     pub fn allocate(&mut self, amount: usize) -> Option<Memory<'heap>> {
         if let Some(mut m) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
-            self.color_map.set_range(self.block_range_of(&m, self.current_color));
+            let color = if self.phase == Phase::MARKING { Color::Check } else { self.current_color };
+            self.color_map.set_range(self.block_range_of(&m, color));
+            if self.phase == Phase::MARKING {
+                self.add_to_check_span(m.start());
+            }
             m.clear();
             Some(m)
         } else {
@@ -253,16 +266,22 @@ impl<'heap> Heap<'heap> {
 
     // set up a mark phase, starting from these roots.
     pub fn mark_start<T>(&mut self, roots: &[&T]) {
+        assert!(self.phase == Phase::QUIET);
         self.check_start = ptr::null();
         self.check_end = ptr::null();
         self.current_color = self.current_color.opposite();
         for r in roots { self.check(*r as *const T as *const u8) }
+        self.phase = Phase::MARKING;
     }
 
     // do one "round" of marking. if we're done after this round, returns
     // true. this lets you do an incremential(-ish) GC if you like.
     pub fn mark_round(&mut self) -> bool {
-        if self.check_start == ptr::null() { return true }
+        assert!(self.phase == Phase::MARKING);
+        if self.check_start == ptr::null() {
+            self.phase = Phase::MARKED;
+            return true;
+        }
 
         let (start, end) = (self.check_start, self.check_end);
         self.check_start = ptr::null();
@@ -287,7 +306,12 @@ impl<'heap> Heap<'heap> {
         }
 
         // we're done marking if there's no new span to check.
-        self.check_start == ptr::null()
+        if self.check_start == ptr::null() {
+            self.phase = Phase::MARKED;
+            true
+        } else {
+            false
+        }
     }
 
     // do the entire mark phase.
@@ -301,13 +325,17 @@ impl<'heap> Heap<'heap> {
             let block = self.block_of(p);
             if self.color_map.get(block) == self.current_color.opposite() {
                 self.color_map.set(block, Color::Check);
-                if self.check_start == ptr::null() || self.check_start > p {
-                    self.check_start = p;
-                }
-                if self.check_end == ptr::null() || self.check_end < p {
-                    self.check_end = p;
-                }
+                self.add_to_check_span(p);
             }
+        }
+    }
+
+    fn add_to_check_span(&mut self, p: *const u8) {
+        if self.check_start == ptr::null() || self.check_start > p {
+            self.check_start = p;
+        }
+        if self.check_end == ptr::null() || self.check_end < p {
+            self.check_end = p;
         }
     }
 
@@ -317,10 +345,12 @@ impl<'heap> Heap<'heap> {
 
     // free any spans that weren't marked
     pub fn sweep(&mut self) {
+        assert!(self.phase == Phase::MARKED);
         self.iter().filter(|span| span.span_type == SpanType::Color(self.current_color.opposite())).for_each(|span| {
             let m = Memory::from_addresses(span.start, span.end);
             span.free_list_span.insert(m);
         });
+        self.phase = Phase::QUIET;
     }
 
     // do an entire GC round

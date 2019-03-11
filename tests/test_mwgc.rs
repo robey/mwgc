@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod test_mwgc {
-    use core::{mem, ptr};
+    use core::mem;
     use mwgc::{Heap, Memory};
 
     static mut DATA: [u8; 256] = [0; 256];
@@ -154,18 +154,17 @@ mod test_mwgc {
         // o1 is saved, o2 will be checked on the next round. so, let's
         // allocate an o4, and move the links to be: o2 -> o4 -> o3.
         let o4 = h.allocate_object::<Sample>().unwrap();
-        assert_eq!(h.dump_spans(), "Green, Check, Blue, Green, FREE");
+        assert_eq!(h.dump_spans(), "Green, Check, Blue, Check, FREE");
         o4.p = Some(o3);
         let o2 = o1.p.take().unwrap();
         let o2_mut = unsafe { &mut *(o2 as *const Sample as *mut Sample) };
         o2_mut.p = Some(o4);
 
-        // assert_eq!(h.mark_round(), true);
-        h.mark_round();
-        assert_eq!(h.dump_spans(), "Green, Green, Blue, Green, FREE");
+        assert_eq!(h.mark_round(), false);
+        assert_eq!(h.dump_spans(), "Green, Green, Check, Green, FREE");
 
-        // let _o5 = h.allocate_object::<Sample>().unwrap();
-
+        assert_eq!(h.mark_round(), true);
+        assert_eq!(h.dump_spans(), "Green, Green, Green, Green, FREE");
     }
 
     #[test]
