@@ -110,7 +110,7 @@ impl<'heap> fmt::Debug for ColorMap<'heap> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BlockRange, Color, ColorMap};
+    use super::{BlockRange, Color, ColorMap};
     use crate::memory::Memory;
 
     #[test]

@@ -1,5 +1,4 @@
 use core::slice;
-use crate::free_list::{FreeBlock, FreeBlockPtr};
 
 // an owned piece of memory
 pub struct Memory<'heap>(&'heap mut [u8]);
@@ -16,18 +15,6 @@ impl<'heap> Memory<'heap> {
     pub fn split_at(self, n: usize) -> (Memory<'heap>, Memory<'heap>) {
         let (m1, m2) = self.0.split_at_mut(n);
         (Memory(m1), Memory(m2))
-    }
-
-    // every block of memory is guaranteed to be big enough to hold a FreeBlock
-    pub fn to_free_block(self, next: FreeBlockPtr<'heap>) -> &'heap mut FreeBlock {
-        let block = unsafe { &mut *(self.0.as_ptr() as *mut u8 as *mut FreeBlock) };
-        block.next = next;
-        block.size = self.0.len();
-        block
-    }
-
-    pub fn from_free_block(block: &'heap mut FreeBlock) -> Memory<'heap> {
-        Memory(unsafe { slice::from_raw_parts_mut(block as *mut FreeBlock as *mut u8, block.size) })
     }
 
     pub fn clear(&mut self) {

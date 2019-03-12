@@ -1,9 +1,7 @@
-use core::fmt;
-use core::mem;
+use core::{fmt, mem, slice};
 use crate::memory::Memory;
 
 // each free block is part of a linked list.
-
 
 // a FreeBlockPtr has "interior mutability"
 #[derive(Clone, Copy)]
@@ -15,24 +13,8 @@ const LAST: FreeBlockPtr = FreeBlockPtr { ptr: None };
 
 impl<'heap> FreeBlockPtr<'heap> {
     pub fn new(m: Memory<'heap>, next: FreeBlockPtr<'heap>) -> FreeBlockPtr<'heap> {
-        let block = m.to_free_block(next);
+        let block = FreeBlock::from_memory(m, next);
         FreeBlockPtr { ptr: Some(block) }
-    }
-
-    pub fn start(&self) -> Option<*const u8> {
-        self.ptr.map(|p| p.start())
-    }
-
-    pub fn end(&self) -> Option<*const u8> {
-        self.ptr.map(|p| p.end())
-    }
-
-    pub fn size(&self) -> Option<usize> {
-        self.ptr.map(|p| p.size)
-    }
-
-    pub fn next(&self) -> Option<&FreeBlockPtr<'heap>> {
-        self.ptr.map(|p| &p.next)
     }
 
     // attempt to allocate memory out of this block.
@@ -44,11 +26,11 @@ impl<'heap> FreeBlockPtr<'heap> {
             } else if block.size - amount < FREE_BLOCK_SIZE {
                 // if there isn't enough left in this block for a new block, just use it all.
                 s.ptr = block.next.ptr;
-                Some(Memory::from_free_block(block.as_mut()))
+                Some(block.as_memory())
             } else {
                 // split off a new alloc
-                let (a1, a2) = Memory::from_free_block(block.as_mut()).split_at(amount);
-                s.ptr = Some(a2.to_free_block(block.next));
+                let (a1, a2) = block.as_memory().split_at(amount);
+                s.ptr = Some(FreeBlock::from_memory(a2, block.next));
                 Some(a1)
             }
         })
@@ -62,7 +44,7 @@ impl<'heap> FreeBlockPtr<'heap> {
         if let Some(block) = s.ptr.as_mut() {
             if block.start() > m.start() {
                 // insert before the current block.
-                let new_block = m.to_free_block(*self);
+                let new_block = FreeBlock::from_memory(m, *self);
                 new_block.check_merge_next();
                 s.ptr = Some(new_block);
                 return None
@@ -76,7 +58,7 @@ impl<'heap> FreeBlockPtr<'heap> {
         match s.ptr.as_mut() {
             None => {
                 // if this is the end, append.
-                s.ptr = Some(m.to_free_block(LAST));
+                s.ptr = Some(FreeBlock::from_memory(m, LAST));
                 None
             },
             Some(block) => {
@@ -117,6 +99,17 @@ pub struct FreeBlock<'heap> {
 pub const FREE_BLOCK_SIZE: usize = mem::size_of::<FreeBlock>();
 
 impl<'heap> FreeBlock<'heap> {
+    pub fn from_memory(m: Memory<'heap>, next: FreeBlockPtr<'heap>) -> &'heap mut FreeBlock<'heap> {
+        let block = unsafe { &mut *(m.start() as *mut u8 as *mut FreeBlock) };
+        block.next = next;
+        block.size = m.len();
+        block
+    }
+
+    pub fn as_memory(&self) -> Memory<'heap> {
+        Memory::new(unsafe { slice::from_raw_parts_mut(self.start() as *mut u8, self.size) })
+    }
+
     // for internal mutations only
     fn as_mut(&self) -> &mut FreeBlock {
         unsafe { &mut *(self as *const FreeBlock as *mut FreeBlock) }
@@ -250,7 +243,7 @@ impl<'heap> FreeList<'heap> {
 
     #[cfg(test)]
     fn debug_span_chain(&self) -> Vec<usize> {
-        self.iter_span().map(|s| s.ptr.size().unwrap_or(0)).collect::<Vec<usize>>()
+        self.iter_span().map(|s| s.ptr.ptr.map(|p| p.size).unwrap_or(0)).collect::<Vec<usize>>()
     }
 
     pub fn allocate(&mut self, amount: usize) -> Option<Memory<'heap>> {
