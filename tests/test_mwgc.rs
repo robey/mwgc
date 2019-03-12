@@ -35,8 +35,8 @@ mod test_mwgc {
         let mut data: [u8; 256] = [0; 256];
         let start = &data[0] as *const u8;
         let h = Heap::new(Memory::new(&mut data));
-        assert_eq!(h.start, start);
-        assert_eq!(h.end, unsafe { h.start.offset(240) });
+        assert_eq!(h.get_stats().start, start);
+        assert_eq!(h.get_stats().end, unsafe { h.get_stats().start.offset(240) });
         assert_eq!(h.dump(), "FREE[240]");
     }
 

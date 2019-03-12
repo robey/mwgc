@@ -12,10 +12,12 @@
 //! ```rust
 //! use mwgc::Heap;
 //!
+//! #[derive(Default)]
+//! struct Toaster { a: u32 }
+//!
 //! let mut data: [u8; 256] = [0; 256];
 //! let mut h = Heap::from_bytes(&mut data);
-//! let o1 = h.allocate_object::<Bread>().unwrap();
-//! let o2 = h.allocate_object::<Toaster>().unwrap();
+//! let o1 = h.allocate_object::<Toaster>().unwrap();
 //! h.gc(&[ o1 ]);
 //! ```
 
@@ -157,8 +159,15 @@ impl<'a> Iterator for HeapIterator<'a> {
 
 
 pub struct HeapStats {
+    /// total bytes available in the heap: provided memory minus overhead
     pub total_bytes: usize,
+
+    /// bytes free for future allocations right now
     pub free_bytes: usize,
+
+    /// for testing & debugging: the extent of the pool
+    pub start: *const u8,
+    pub end: *const u8,
 }
 
 #[derive(PartialEq)]
@@ -168,14 +177,14 @@ enum Phase {
 
 // this should be about 9 words of state (36 bytes on a 32-bit system)
 pub struct Heap<'heap> {
-    pub start: *const u8,
-    pub end: *const u8,
+    start: *const u8,
+    end: *const u8,
     blocks: usize,
     color_map: ColorMap<'heap>,
     free_list: FreeList<'heap>,
 
     // gc state:
-    pub current_color: Color,
+    current_color: Color,
     phase: Phase,
 
     // for marking:
@@ -405,7 +414,12 @@ impl<'heap> Heap<'heap> {
     }
 
     pub fn get_stats(&self) -> HeapStats {
-        HeapStats { total_bytes: self.blocks * BLOCK_SIZE_BYTES, free_bytes: self.free_list.bytes() }
+        HeapStats {
+            total_bytes: self.blocks * BLOCK_SIZE_BYTES,
+            free_bytes: self.free_list.bytes(),
+            start: self.start,
+            end: self.end,
+        }
     }
 }
 
