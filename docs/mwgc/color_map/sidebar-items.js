@@ -1,0 +1,1 @@
+initSidebarItems({"constant":[["BLOCKS_PER_COLORMAP_BYTE",""]],"enum":[["Color",""]],"struct":[["BlockRange",""],["ColorMap",""],["ColorMapIterator",""]]});

@@ -1,0 +1,1 @@
+initSidebarItems({"constant":[["FREE_BLOCK_SIZE",""]],"struct":[["FreeBlock",""],["FreeBlockPtr",""],["FreeList",""],["FreeListIterator",""],["FreeListSpan",""],["FreeListSpanIterator",""]]});
