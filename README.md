@@ -16,6 +16,8 @@ let o2 = h.allocate_object::<Toaster>().unwrap();
 h.gc(&[ o1 ]);
 ```
 
+- [online API documentation](https://robey.github.io/mwgc/mwgc/index.html)
+
 
 ## Usage
 
