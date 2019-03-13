@@ -23,8 +23,8 @@ impl fmt::Debug for SpanType {
 
 #[derive(Clone, Copy)]
 struct HeapSpan<'a> {
-    pub start: *const u8,
-    pub end: *const u8,
+    pub start: *mut u8,
+    pub end: *mut u8,
     pub span_type: SpanType,
     pub free_list_span: FreeListSpan<'a>,
 }
@@ -58,7 +58,7 @@ impl<'a> fmt::Debug for HeapSpan<'a> {
 struct HeapIterator<'a> {
     heap: &'a Heap<'a>,
     free_list_span: FreeListSpan<'a>,
-    current: *const u8,
+    current: *mut u8,
 }
 
 impl<'a> HeapIterator<'a> {
@@ -105,6 +105,7 @@ impl<'a> Iterator for HeapIterator<'a> {
 }
 
 
+/// Stats returned from [`Heap::get_stats`](struct.Heap.html#method.get_stats).
 pub struct HeapStats {
     /// total bytes available in the heap: provided memory minus overhead
     pub total_bytes: usize,
@@ -114,6 +115,8 @@ pub struct HeapStats {
 
     /// for testing & debugging: the extent of the pool
     pub start: *const u8,
+
+    /// for testing & debugging: the extent of the pool
     pub end: *const u8,
 }
 
@@ -123,10 +126,28 @@ enum Phase {
     QUIET, MARKING, MARKED
 }
 
-// this should be about 9 words of state (36 bytes on a 32-bit system)
+/// Takes ownership of a block of [`Memory`](struct.Memory.html), hands out
+/// chunks of it, and garbage collects unused chunks on demand.
+///
+/// The heap is organized into allocatable blocks, with a small region
+/// reserved as a bitmap. The block size is configured by a compile-time
+/// constant, using a default of 16 bytes. Each block has a 2-bit "color"
+/// in the bitmap, at a cost of about 2% overhead. One "color" is used to
+/// mark continuations of contiguous spans, so each allocation can be
+/// identified by a color followed by one or more "continue" markers. The
+/// other 3 colors correspond to the white, gray, and black colors of
+/// tri-color marking, although I've chosen to call them blue, green, and
+/// "check".
+///
+/// Separately, a sorted free list is maintained by storing a "next" link
+/// and size in each free block. This consumes 8 bytes on a 32-bit system,
+/// limiting the minimum block size.
+///
+/// The heap object (its state) should consume about 9 words, or 36 bytes
+/// on a 32-bit system.
 pub struct Heap<'heap> {
-    start: *const u8,
-    end: *const u8,
+    start: *mut u8,
+    end: *mut u8,
     blocks: usize,
     color_map: ColorMap<'heap>,
     free_list: FreeList<'heap>,
@@ -141,6 +162,7 @@ pub struct Heap<'heap> {
 }
 
 impl<'heap> Heap<'heap> {
+    /// Create a new heap out of a mutable chunk of memory.
     pub fn new(m: Memory<'heap>) -> Heap<'heap> {
         // total heap = pool + color_map, and pool is just color_map_size * blocks_per_colormap_byte * block_size
         // so color_map_size = heap size / (1 + bpm * bs)
@@ -166,13 +188,14 @@ impl<'heap> Heap<'heap> {
         }
     }
 
+    /// Create a new heap out of a mutable byte-slice.
     pub fn from_bytes(bytes: &'heap mut [u8]) -> Heap<'heap> {
         Heap::new(Memory::new(bytes))
     }
 
     #[inline]
-    fn address_of(&self, block: usize) -> *const u8 {
-        ((self.start as usize) + block * BLOCK_SIZE_BYTES) as *const u8
+    fn address_of(&self, block: usize) -> *mut u8 {
+        ((self.start as usize) + block * BLOCK_SIZE_BYTES) as *mut u8
     }
 
     #[inline]
@@ -197,6 +220,9 @@ impl<'heap> Heap<'heap> {
         self.color_map.get_range(self.block_of(p))
     }
 
+    /// Request a `amount` bytes of memory. The size will be rounded up to
+    /// a multiple of the block size. Returns `None` if a block of memory
+    /// that big isn't available,
     pub fn allocate(&mut self, amount: usize) -> Option<Memory<'heap>> {
         if let Some(mut m) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
             let color = if self.phase == Phase::MARKING { Color::Check } else { self.current_color };
@@ -211,6 +237,9 @@ impl<'heap> Heap<'heap> {
         }
     }
 
+    /// Request enough memory to hold an object of type `T`. The object will
+    /// be initialized to its default value. Returns `None` if a block of
+    /// memory that big isn't available.
     pub fn allocate_object<T: Default>(&mut self) -> Option<&'heap mut T> {
         self.allocate(mem::size_of::<T>()).map(|m| {
             let obj: &'heap mut T = unsafe { mem::transmute(m.inner().as_mut_ptr()) };
@@ -219,6 +248,9 @@ impl<'heap> Heap<'heap> {
         })
     }
 
+    /// Request enough memory to hold an array of `count` objects of type `T`.
+    /// Each object in the array will be initialized to its default value.
+    /// Returns `None` if a block of memory that big isn't available.
     pub fn allocate_array<T: Default>(&mut self, count: usize) -> Option<&'heap mut [T]> {
         self.allocate(mem::size_of::<T>() * count).map(|m| unsafe {
             let array: &'heap mut [T] = slice::from_raw_parts_mut(mem::transmute(m.inner().as_mut_ptr()), count);
@@ -229,13 +261,13 @@ impl<'heap> Heap<'heap> {
         })
     }
 
-    // give back an allocation without waiting for a GC round.
+    /// Give back an allocation without waiting for a GC round.
     pub fn retire(&mut self, m: Memory<'heap>) {
         self.color_map.free_range(self.block_range_of(&m, Color::Check));
         self.free_list.retire(m);
     }
 
-    // give back an allocation without waiting for a GC round.
+    /// Give back an allocated object without waiting for a GC round.
     pub fn retire_object<T>(&mut self, obj: &'heap mut T) {
         let range = self.get_range(obj as *mut T as *const T as *const u8);
         let m = Memory::from_addresses(self.address_of(range.start), self.address_of(range.end));
@@ -243,7 +275,21 @@ impl<'heap> Heap<'heap> {
         self.free_list.retire(m);
     }
 
-    // set up a mark phase, starting from these roots.
+    /// Start the first phase of garbage collection. This is only useful if
+    /// you want tight control over latency -- otherwise, you should call
+    /// [`gc()`](struct.Heap.html#method.gc).
+    ///
+    /// `roots` must be a slice of references to objects in the heap which
+    /// are the roots of your object graph. Successive calls to
+    /// [`mark_round()`](struct.Heap.html#method.mark_round) will follow the
+    /// object graph and mark all live objects. A follow-on call to
+    /// [`sweep()`](struct.Heap.html#method.sweep) will free the
+    /// remaining spans.
+    ///
+    /// **Important**: If you modify any objects before `mark_round()` returns
+    /// `true`, you must notify the garbage collector to (re)check the object
+    /// you modified by calling
+    /// [`mark_check`](struct.Heap.html#method.mark_check).
     pub fn mark_start<T>(&mut self, roots: &[&T]) {
         assert!(self.phase == Phase::QUIET);
         self.check_start = ptr::null();
@@ -253,8 +299,21 @@ impl<'heap> Heap<'heap> {
         self.phase = Phase::MARKING;
     }
 
-    // do one "round" of marking. if we're done after this round, returns
-    // true. this lets you do an incremential(-ish) GC if you like.
+    /// Do one "round" of the mark phase of garbage collection. This is only
+    /// useful if you want tight control over latency -- otherwise, you
+    /// should call [`gc()`](struct.Heap.html#method.gc).
+    ///
+    /// Walk the current mark span, following links from marked objects to
+    /// find objects to check on the next round.
+    ///
+    /// Returns true if this phase is over, and all live objects have been
+    /// marked. You must call [`sweep()`](struct.Heap.html#method.sweep) to
+    /// finish the collection and free up memory.
+    ///
+    /// **Important**: If you modify any objects before this function returns
+    /// `true`, you must notify the garbage collector to (re)check the object
+    /// you modified by calling
+    /// [`mark_check`](struct.Heap.html#method.mark_check).
     pub fn mark_round(&mut self) -> bool {
         assert!(self.phase == Phase::MARKING);
         if self.check_start == ptr::null() {
@@ -293,14 +352,24 @@ impl<'heap> Heap<'heap> {
         }
     }
 
-    // do the entire mark phase.
+    /// Do the mark phase of garbage collection (the first of two phases).
+    ///
+    /// `roots` must be a slice of references to objects in the heap which
+    /// are the roots of your object graph. Any object that isn't directly
+    /// or indirectly referenced by these roots will be freed by a following
+    /// call to [`sweep()`](struct.Heap.html#method.sweep).
+    ///
+    /// This is the equivalent of `heap.mark_start(roots); while !heap.mark_round() {};`.
     pub fn mark<T>(&mut self, roots: &[&T]) {
         self.mark_start(roots);
         while !self.mark_round() {}
     }
 
-    // call me if you mutate an object while the mark phase is running.
-    // (forces a re-check even if we've already traversed this object)
+    /// Mark an object to be re-checked because it's been modified during the
+    /// mark phase of garbage collection.
+    ///
+    /// This function is only useful if you use the incremental GC calls
+    /// `mark_start` and `mark_round`.
     pub fn mark_check<T>(&mut self, obj: &T) {
         let p = obj as *const T as *const u8;
         if self.is_block(p) {
@@ -329,11 +398,14 @@ impl<'heap> Heap<'heap> {
         }
     }
 
+    /// For debugging and tests, report the current range of addresses that
+    /// will be scanned on the next `mark_round`.
     pub fn get_mark_range(&self) -> (*const u8, *const u8) {
         (self.check_start, self.check_end)
     }
 
-    // free any spans that weren't marked
+    /// Sweep through the heap and move every un-marked span of memory into
+    /// the free list. This is the 2nd and final phase of garbage collection.
     pub fn sweep(&mut self) {
         assert!(self.phase == Phase::MARKED);
         self.iter().filter(|span| span.span_type == SpanType::Color(self.current_color.opposite())).for_each(|span| {
@@ -343,7 +415,13 @@ impl<'heap> Heap<'heap> {
         self.phase = Phase::QUIET;
     }
 
-    // do an entire GC round
+    /// Do an entire GC round, freeing any currently unused memory.
+    ///
+    /// `roots` must be a slice of references to objects in the heap which
+    /// are the roots of your object graph. Any object that isn't directly
+    /// or indirectly referenced by these roots will be freed.
+    ///
+    /// This is the equivalent of `heap.mark(roots); heap.sweep();`.
     pub fn gc<T>(&mut self, roots: &[&T]) {
         self.mark(roots);
         self.sweep();
@@ -353,14 +431,19 @@ impl<'heap> Heap<'heap> {
         HeapIterator::new(self)
     }
 
+    /// For debugging: generate a string listing the size and color of each
+    /// span of memory.
     pub fn dump(&self) -> String {
         self.iter().map(|span| { format!("{:?}", span) }).collect::<Vec<String>>().join(", ")
     }
 
+    /// For debugging: generate a string listing _only_ the color of each
+    /// span of memory.
     pub fn dump_spans(&self) -> String {
         self.iter().map(|span| { format!("{:?}", span.span_type) }).collect::<Vec<String>>().join(", ")
     }
 
+    /// Return an object listing the free & total bytes of this heap.
     pub fn get_stats(&self) -> HeapStats {
         HeapStats {
             total_bytes: self.blocks * BLOCK_SIZE_BYTES,

@@ -19,7 +19,7 @@ h.gc(&[ o1 ]);
 
 ## Usage
 
-The `Heap` takes ownership of a block of `Memory` (which is a wrapper for a mutable byte slice `&mut [u8]`), and hands out chunks of it on demand.
+The `Heap` takes ownership of a block of `Memory` (which is a wrapper for a mutable byte slice `&mut [u8]`), hands out chunks of it, and garbage collects unused chunks on demand.
 
 - `pub fn new(m: Memory<'heap>) -> Heap<'heap>`
 - `pub fn allocate(&mut self, amount: usize) -> Option<Memory<'heap>>`

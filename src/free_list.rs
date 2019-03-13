@@ -116,13 +116,13 @@ impl<'heap> FreeBlock<'heap> {
     }
 
     #[inline]
-    pub fn start(&self) -> *const u8 {
-        self as *const FreeBlock as *const u8
+    pub fn start(&self) -> *mut u8 {
+        self.as_mut() as *mut FreeBlock as *mut u8
     }
 
     #[inline]
-    pub fn end(&self) -> *const u8 {
-        ((self.start() as usize) + self.size) as *const u8
+    pub fn end(&self) -> *mut u8 {
+        ((self.start() as usize) + self.size) as *mut u8
     }
 
     // check if this block and the next can be merged, and if so, merge them.
@@ -232,8 +232,8 @@ impl<'heap> FreeList<'heap> {
     }
 
     #[cfg(test)]
-    fn first_available(&self) -> *const u8 {
-        self.list.ptr.map(|block| block.start()).unwrap_or(core::ptr::null())
+    fn first_available(&self) -> *mut u8 {
+        self.list.ptr.map(|block| block.start()).unwrap_or(core::ptr::null_mut())
     }
 
     #[cfg(test)]
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn allocate() {
         let mut data: [u8; 256] = [0; 256];
-        let start = &data as *const u8;
+        let start = &mut data[0] as *mut u8;
         let mut f = FreeList::new(Memory::new(&mut data));
         let origin = f.first_available();
         assert_eq!(origin, start);
