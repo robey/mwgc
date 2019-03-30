@@ -238,6 +238,8 @@ mod test_mwgc {
         assert_eq!(stats.total_bytes, 240);
         assert_eq!(stats.free_bytes, 240 - 5 * mem::size_of::<Sample>());
 
+        assert!(h.size_of(o1) >= mem::size_of::<Sample>());
+
         h.gc(&[ o1 ]);
         assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
         let stats2 = h.get_stats();

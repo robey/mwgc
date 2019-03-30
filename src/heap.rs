@@ -248,6 +248,17 @@ impl<'heap> Heap<'heap> {
         })
     }
 
+    /// Request enough memory to hold an object of type `T` followed by
+    /// dynamic-sized padding. The object will be initialized to its default
+    /// value. Returns `None` if a block of memory that big isn't available.
+    pub fn allocate_dynamic_object<T: Default>(&mut self, padding: usize) -> Option<&'heap mut T> {
+        self.allocate(mem::size_of::<T>() + padding).map(|m| {
+            let obj: &'heap mut T = unsafe { mem::transmute(m.inner().as_mut_ptr()) };
+            *obj = T::default();
+            obj
+        })
+    }
+
     /// Request enough memory to hold an array of `count` objects of type `T`.
     /// Each object in the array will be initialized to its default value.
     /// Returns `None` if a block of memory that big isn't available.
@@ -259,6 +270,13 @@ impl<'heap> Heap<'heap> {
             }
             array
         })
+    }
+
+    /// Given an object that was allocated on this heap, how many bytes were
+    /// allocated to it?
+    pub fn size_of<T>(&self, obj: &T) -> usize {
+        let range = self.get_range(obj as *const T as *const u8);
+        (self.address_of(range.end) as usize) - (self.address_of(range.start) as usize)
     }
 
     /// Give back an allocation without waiting for a GC round.
