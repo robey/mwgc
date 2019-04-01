@@ -29,7 +29,7 @@ mod free_list;
 mod heap;
 mod memory;
 
-pub use self::heap::{Heap, HeapStats};
+pub use self::heap::{Heap, HeapMutRef, HeapRef, HeapStats};
 pub use self::memory::Memory;
 
 /// how many bytes are in each block of memory?

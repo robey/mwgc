@@ -5,6 +5,10 @@ use crate::color_map::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
 use crate::free_list::{FreeBlock, FreeList, FreeListSpan};
 use crate::memory::Memory;
 
+pub type HeapRef<'heap> = &'heap Heap<'heap>;
+pub type HeapMutRef<'heap> = &'heap mut Heap<'heap>;
+
+
 #[derive(Clone, Copy, PartialEq)]
 enum SpanType {
     Color(Color),
