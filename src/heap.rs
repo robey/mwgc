@@ -5,9 +5,6 @@ use crate::color_map::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
 use crate::free_list::{FreeBlock, FreeList, FreeListSpan};
 use crate::memory::Memory;
 
-pub type HeapRef<'heap> = &'heap Heap<'heap>;
-pub type HeapMutRef<'heap> = &'heap mut Heap<'heap>;
-
 
 #[derive(Clone, Copy, PartialEq)]
 enum SpanType {
@@ -228,28 +225,22 @@ impl<'heap> Heap<'heap> {
     /// a multiple of the block size. Returns `None` if a block of memory
     /// that big isn't available,
     pub fn allocate(&mut self, amount: usize) -> Option<Memory<'heap>> {
-        if let Some(mut m) = self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)) {
+        self.free_list.allocate(ceil_to(amount, BLOCK_SIZE_BYTES)).map(|mut m| {
             let color = if self.phase == Phase::MARKING { Color::Check } else { self.current_color };
             self.color_map.set_range(self.block_range_of(&m, color));
             if self.phase == Phase::MARKING {
                 self.add_to_check_span(m.start());
             }
             m.clear();
-            Some(m)
-        } else {
-            None
-        }
+            m
+        })
     }
 
     /// Request enough memory to hold an object of type `T`. The object will
     /// be initialized to its default value. Returns `None` if a block of
     /// memory that big isn't available.
     pub fn allocate_object<T: Default>(&mut self) -> Option<&'heap mut T> {
-        self.allocate(mem::size_of::<T>()).map(|m| {
-            let obj: &'heap mut T = unsafe { mem::transmute(m.inner().as_mut_ptr()) };
-            *obj = T::default();
-            obj
-        })
+        self.allocate_dynamic_object(0)
     }
 
     /// Request enough memory to hold an object of type `T` followed by
