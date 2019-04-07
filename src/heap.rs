@@ -221,6 +221,12 @@ impl<'heap> Heap<'heap> {
         self.color_map.get_range(self.block_of(p))
     }
 
+    /// Was this object allocated from within this heap?
+    pub fn is_inside<T>(&self, obj: &T) -> bool {
+        let addr = obj as *const T as *const u8;
+        addr >= self.start && addr < self.end
+    }
+
     /// Request a `amount` bytes of memory. The size will be rounded up to
     /// a multiple of the block size. Returns `None` if a block of memory
     /// that big isn't available,
