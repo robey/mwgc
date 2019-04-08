@@ -35,7 +35,9 @@ fn new_heap() {
     let h = Heap::new(Memory::new(&mut data));
     assert_eq!(h.get_stats().start, start);
     assert_eq!(h.get_stats().end, unsafe { h.get_stats().start.offset(240) });
-    assert_eq!(h.dump(), "FREE[240]");
+
+    let mut buffer: [u8; 256] = [0; 256];
+    assert_eq!(h.dump_into(&mut buffer), "FREE[240]");
 }
 
 #[test]
@@ -46,7 +48,9 @@ fn allocate() {
     assert!(alloc.is_some());
     if let Some(m) = alloc {
         assert_eq!(m.len(), 32);
-        assert_eq!(h.dump(), "Blue[32], FREE[208]");
+
+        let mut buffer: [u8; 256] = [0; 256];
+        assert_eq!(h.dump_into(&mut buffer), "Blue[32], FREE[208]");
     }
 }
 
@@ -58,26 +62,32 @@ fn allocate_array() {
     assert!(array.is_some());
     if let Some(a) = array {
         assert_eq!(a.len(), 10);
+
         // multiple of 16:
-        assert_eq!(h.dump(), "Blue[48], FREE[192]");
+        let mut buffer: [u8; 256] = [0; 256];
+        assert_eq!(h.dump_into(&mut buffer), "Blue[48], FREE[192]");
     }
 }
 
 #[test]
 fn retire() {
     let mut data: [u8; 256] = [0; 256];
+    let mut buffer: [u8; 256] = [0; 256];
     let mut h = Heap::new(Memory::new(&mut data));
     let m1 = h.allocate(32).unwrap();
     let m2 = h.allocate(32).unwrap();
     h.retire(m1);
-    assert_eq!(h.dump(), "FREE[32], Blue[32], FREE[176]");
+    assert_eq!(h.dump_into(&mut buffer), "FREE[32], Blue[32], FREE[176]");
     h.retire(m2);
-    assert_eq!(h.dump(), "FREE[240]");
+    assert_eq!(h.dump_into(&mut buffer), "FREE[240]");
 
     let m3 = h.allocate_object::<Sample>().unwrap();
-    assert_eq!(h.dump(), format!("Blue[{}], FREE[{}]", mem::size_of::<Sample>(), 240 - mem::size_of::<Sample>()));
+    assert_eq!(
+        h.dump_into(&mut buffer),
+        format!("Blue[{}], FREE[{}]", mem::size_of::<Sample>(), 240 - mem::size_of::<Sample>())
+    );
     h.retire_object(m3);
-    assert_eq!(h.dump(), "FREE[240]");
+    assert_eq!(h.dump_into(&mut buffer), "FREE[240]");
 }
 
 #[test]
@@ -89,7 +99,9 @@ fn mark_simple() {
     let _o3 = h.allocate_object::<Sample>().unwrap();
     let o4 = h.allocate_object::<Sample>().unwrap();
     let o5 = h.allocate_object::<Sample>().unwrap();
-    assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, Blue, FREE");
+
+    let mut buffer: [u8; 256] = [0; 256];
+    assert_eq!(h.dump_spans_into(&mut buffer), "Blue, Blue, Blue, Blue, Blue, FREE");
 
     // leave o3 stranded. make o1 point to o2, which points to o4, o5, and back to o1.
     o4.p = Some(unsafe { &*(455 as *const Sample) });
@@ -101,19 +113,19 @@ fn mark_simple() {
 
     h.mark_start(&[ o1 ]);
     assert_eq!(h.get_mark_range(), (o1.ptr(), o1.ptr()));
-    assert_eq!(h.dump_spans(), "Check, Blue, Blue, Blue, Blue, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Check, Blue, Blue, Blue, Blue, FREE");
 
     assert!(!h.mark_round());
     assert_eq!(h.get_mark_range(), (o2.ptr(), o2.ptr()));
-    assert_eq!(h.dump_spans(), "Green, Check, Blue, Blue, Blue, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Check, Blue, Blue, Blue, FREE");
 
     assert!(!h.mark_round());
     assert_eq!(h.get_mark_range(), (o4.ptr(), o5.ptr()));
-    assert_eq!(h.dump_spans(), "Green, Green, Blue, Check, Check, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Green, Blue, Check, Check, FREE");
 
     assert!(h.mark_round());
     assert_eq!(h.get_mark_range(), (core::ptr::null(), core::ptr::null()));
-    assert_eq!(h.dump_spans(), "Green, Green, Blue, Green, Green, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Green, Blue, Green, Green, FREE");
 }
 
 #[test]
@@ -125,25 +137,28 @@ fn sweep_simple() {
     let o3 = h.allocate_object::<Sample>().unwrap();
     let _o4 = h.allocate_object::<Sample>().unwrap();
     let _o5 = h.allocate_object::<Sample>().unwrap();
-    assert_eq!(h.dump_spans(), "Blue, Blue, Blue, Blue, Blue, FREE");
+
+    let mut buffer: [u8; 256] = [0; 256];
+    assert_eq!(h.dump_spans_into(&mut buffer), "Blue, Blue, Blue, Blue, Blue, FREE");
 
     o1.p = Some(o3);
     h.mark(&[ o1 ]);
-    assert_eq!(h.dump_spans(), "Green, Blue, Green, Blue, Blue, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Blue, Green, Blue, Blue, FREE");
     h.sweep();
-    assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, FREE, Green, FREE");
 
     o1.p = None;
     h.mark(&[ o1 ]);
-    assert_eq!(h.dump_spans(), "Blue, FREE, Green, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Blue, FREE, Green, FREE");
     h.sweep();
-    assert_eq!(h.dump_spans(), "Blue, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Blue, FREE");
 }
 
 #[test]
 fn alloc_during_collection() {
     let mut data: [u8; 256] = [0; 256];
     let mut h = Heap::new(Memory::new(&mut data));
+    let mut buffer: [u8; 256] = [0; 256];
 
     // start with o1 -> o2 -> o3.
     let o1 = h.allocate_object::<Sample>().unwrap();
@@ -153,30 +168,31 @@ fn alloc_during_collection() {
     o1.p = Some(o2);
 
     h.mark_start(&[ o1 ]);
-    assert_eq!(h.dump_spans(), "Check, Blue, Blue, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Check, Blue, Blue, FREE");
 
     assert_eq!(h.mark_round(), false);
-    assert_eq!(h.dump_spans(), "Green, Check, Blue, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Check, Blue, FREE");
 
     // o1 is saved, o2 will be checked on the next round. so, let's
     // allocate an o4, and move the links to be: o2 -> o4 -> o3.
     let o4 = h.allocate_object::<Sample>().unwrap();
-    assert_eq!(h.dump_spans(), "Green, Check, Blue, Check, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Check, Blue, Check, FREE");
     o4.p = Some(o3);
     let o2 = o1.p.take().unwrap().as_mut();
     o2.p = Some(o4);
 
     assert_eq!(h.mark_round(), false);
-    assert_eq!(h.dump_spans(), "Green, Green, Check, Green, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Green, Check, Green, FREE");
 
     assert_eq!(h.mark_round(), true);
-    assert_eq!(h.dump_spans(), "Green, Green, Green, Green, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Green, Green, Green, FREE");
 }
 
 #[test]
 fn inner_pointer() {
     let mut data: [u8; 256] = [0; 256];
     let mut h = Heap::new(Memory::new(&mut data));
+    let mut buffer: [u8; 256] = [0; 256];
 
     // o1 points to inside o3.
     let o1 = h.allocate_object::<Sample>().unwrap();
@@ -186,13 +202,14 @@ fn inner_pointer() {
     o1.p = Some(inside_o3);
 
     h.gc(&[ o1 ]);
-    assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, FREE, Green, FREE");
 }
 
 #[test]
 fn ref_moves_backward() {
     let mut data: [u8; 256] = [0; 256];
     let mut h = Heap::new(Memory::new(&mut data));
+    let mut buffer: [u8; 256] = [0; 256];
 
     // start with o1 -> o2 -> o3.
     let o1 = h.allocate_object::<Sample>().unwrap();
@@ -202,10 +219,10 @@ fn ref_moves_backward() {
     o1.p = Some(o2);
 
     h.mark_start(&[ o1 ]);
-    assert_eq!(h.dump_spans(), "Check, Blue, Blue, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Check, Blue, Blue, FREE");
 
     assert_eq!(h.mark_round(), false);
-    assert_eq!(h.dump_spans(), "Green, Check, Blue, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Check, Blue, FREE");
 
     // suddenly it's o1 -> o3 -> o2.
     let o2 = o1.p.take().unwrap().as_mut();
@@ -213,13 +230,13 @@ fn ref_moves_backward() {
     o3.p = Some(o2);
     o1.p = Some(o3);
     h.mark_check(o1);
-    assert_eq!(h.dump_spans(), "Check, Check, Blue, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Check, Check, Blue, FREE");
 
     assert_eq!(h.mark_round(), false);
-    assert_eq!(h.dump_spans(), "Green, Green, Check, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Green, Check, FREE");
 
     assert_eq!(h.mark_round(), true);
-    assert_eq!(h.dump_spans(), "Green, Green, Green, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, Green, Green, FREE");
 }
 
 #[test]
@@ -238,8 +255,10 @@ fn api() {
 
     assert!(h.size_of(o1) >= mem::size_of::<Sample>());
 
+    let mut buffer: [u8; 256] = [0; 256];
+
     h.gc(&[ o1 ]);
-    assert_eq!(h.dump_spans(), "Green, FREE, Green, FREE");
+    assert_eq!(h.dump_spans_into(&mut buffer), "Green, FREE, Green, FREE");
     let stats2 = h.get_stats();
     assert_eq!(stats2.total_bytes, 240);
     assert_eq!(stats2.free_bytes, 240 - 2 * mem::size_of::<Sample>());

@@ -4,6 +4,7 @@ use crate::{BLOCK_SIZE_BYTES, ceil_to, div_ceil, floor_to};
 use crate::color_map::{BlockRange, BLOCKS_PER_COLORMAP_BYTE, Color, ColorMap};
 use crate::free_list::{FreeBlock, FreeList, FreeListSpan};
 use crate::memory::Memory;
+use crate::string_buffer::StringBuffer;
 
 
 #[derive(Clone, Copy, PartialEq)]
@@ -452,14 +453,36 @@ impl<'heap> Heap<'heap> {
 
     /// For debugging: generate a string listing the size and color of each
     /// span of memory.
-    pub fn dump(&self) -> String {
-        self.iter().map(|span| { format!("{:?}", span) }).collect::<Vec<String>>().join(", ")
+    pub fn dump<W: fmt::Write>(&self, buffer: &mut W) {
+        let mut first = true;
+        for span in self.iter() {
+            if !first && write!(buffer, ", ").is_err() { return; }
+            first = false;
+            if write!(buffer, "{:?}", span).is_err() { return; }
+        }
+    }
+
+    pub fn dump_into<'a>(&self, bytes: &'a mut [u8]) -> &'a str {
+        let mut b = StringBuffer::new(bytes);
+        self.dump(&mut b);
+        b.to_str()
     }
 
     /// For debugging: generate a string listing _only_ the color of each
     /// span of memory.
-    pub fn dump_spans(&self) -> String {
-        self.iter().map(|span| { format!("{:?}", span.span_type) }).collect::<Vec<String>>().join(", ")
+    pub fn dump_spans<W: fmt::Write>(&self, buffer: &mut W) {
+        let mut first = true;
+        for span in self.iter() {
+            if !first && write!(buffer, ", ").is_err() { return; }
+            first = false;
+            if write!(buffer, "{:?}", span.span_type).is_err() { return; }
+        }
+    }
+
+    pub fn dump_spans_into<'a>(&self, bytes: &'a mut [u8]) -> &'a str {
+        let mut b = StringBuffer::new(bytes);
+        self.dump_spans(&mut b);
+        b.to_str()
     }
 
     /// Return an object listing the free & total bytes of this heap.
@@ -473,11 +496,12 @@ impl<'heap> Heap<'heap> {
     }
 }
 
+#[cfg(test)]
 impl<'a> fmt::Debug for Heap<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Heap(pool={:?}, blocks={}x{}, ", self.start, self.blocks, BLOCK_SIZE_BYTES)?;
         if f.alternate() {
-            write!(f, "{}", self.dump())?;
+            self.dump(f);
         } else {
             write!(f, "{:?}, {:?}", self.color_map, self.free_list)?;
         }

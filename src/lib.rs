@@ -21,6 +21,8 @@
 //! h.gc(&[ o1 ]);
 //! ```
 
+// #![no_std]
+
 #[macro_use]
 extern crate static_assertions;
 
@@ -28,9 +30,11 @@ mod color_map;
 mod free_list;
 mod heap;
 mod memory;
+mod string_buffer;
 
 pub use self::heap::{Heap, HeapStats};
 pub use self::memory::Memory;
+pub use self::string_buffer::StringBuffer;
 
 /// how many bytes are in each block of memory?
 /// smaller means more overhead wasted for tracking memory. larger means more wasted memory.
