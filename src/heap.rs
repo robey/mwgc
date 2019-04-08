@@ -453,18 +453,19 @@ impl<'heap> Heap<'heap> {
 
     /// For debugging: generate a string listing the size and color of each
     /// span of memory.
-    pub fn dump<W: fmt::Write>(&self, buffer: &mut W) {
+    pub fn dump<W: fmt::Write>(&self, buffer: &mut W) -> fmt::Result {
         let mut first = true;
         for span in self.iter() {
-            if !first && write!(buffer, ", ").is_err() { return; }
+            if !first { write!(buffer, ", ")?; }
             first = false;
-            if write!(buffer, "{:?}", span).is_err() { return; }
+            write!(buffer, "{:?}", span)?;
         }
+        Ok(())
     }
 
     pub fn dump_into<'a>(&self, bytes: &'a mut [u8]) -> &'a str {
         let mut b = StringBuffer::new(bytes);
-        self.dump(&mut b);
+        self.dump(&mut b).ok();
         b.to_str()
     }
 
@@ -501,7 +502,7 @@ impl<'a> fmt::Debug for Heap<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Heap(pool={:?}, blocks={}x{}, ", self.start, self.blocks, BLOCK_SIZE_BYTES)?;
         if f.alternate() {
-            self.dump(f);
+            self.dump(f)?;
         } else {
             write!(f, "{:?}, {:?}", self.color_map, self.free_list)?;
         }

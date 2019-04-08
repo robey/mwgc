@@ -21,7 +21,7 @@
 //! h.gc(&[ o1 ]);
 //! ```
 
-// #![no_std]
+#![no_std]
 
 #[macro_use]
 extern crate static_assertions;
