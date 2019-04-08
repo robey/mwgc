@@ -236,16 +236,6 @@ impl<'heap> FreeList<'heap> {
         self.list.ptr.map(|block| block.start()).unwrap_or(core::ptr::null_mut())
     }
 
-    #[cfg(test)]
-    fn debug_chain(&self) -> Vec<usize> {
-        self.iter().map(|p| p.size).collect::<Vec<usize>>()
-    }
-
-    #[cfg(test)]
-    fn debug_span_chain(&self) -> Vec<usize> {
-        self.iter_span().map(|s| s.ptr.ptr.map(|p| p.size).unwrap_or(0)).collect::<Vec<usize>>()
-    }
-
     pub fn allocate(&mut self, amount: usize) -> Option<Memory<'heap>> {
         self.iter_span().find_map(|p| p.ptr.allocate(amount))
     }
@@ -268,9 +258,14 @@ impl<'heap> FreeList<'heap> {
 
 impl<'heap> fmt::Debug for FreeList<'heap> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "FreeList({})", self.iter().map(|block| {
-            format!("{:?}", block)
-        }).collect::<Vec<String>>().join(" -> "))
+        write!(f, "FreeList(")?;
+        let mut first = true;
+        for block in self.iter() {
+            if !first { write!(f, " -> ")?; }
+            first = false;
+            write!(f, "{:?}", block)?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -278,6 +273,27 @@ impl<'heap> fmt::Debug for FreeList<'heap> {
 #[cfg(test)]
 mod tests {
     use super::{FreeList, Memory};
+
+    fn assert_chain(f: &FreeList, expected: &[usize]) {
+        let mut i = 0;
+        for block in f.iter() {
+            assert!(i < expected.len(), "{:?} != {:?}", f, expected);
+            assert_eq!(expected[i], block.size, "{:?} != {:?}", f, expected);
+            i += 1;
+        }
+        assert!(i == expected.len(), "{:?} != {:?}", f, expected);
+    }
+
+    fn assert_span_chain(f: &FreeList, expected: &[usize]) {
+        let mut i = 0;
+        for span in f.iter_span() {
+            assert!(i < expected.len(), "{:?} != {:?}", f, expected);
+            let size = span.ptr.ptr.map(|p| p.size).unwrap_or(0);
+            assert_eq!(expected[i], size, "{:?} != {:?}", f, expected);
+            i += 1;
+        }
+        assert!(i == expected.len(), "{:?} != {:?}", f, expected);
+    }
 
     #[test]
     fn allocate() {
@@ -319,8 +335,8 @@ mod tests {
         assert_eq!(m1.start(), first_addr);
         assert_eq!(m2.start(), m1.offset(128));
         assert!(m3.is_none());
-        assert_eq!(f.debug_chain(), vec![]);
-        assert_eq!(f.debug_span_chain(), vec![ 0 ]);
+        assert_chain(&f, &[]);
+        assert_span_chain(&f, &[ 0 ]);
     }
 
     #[test]
@@ -334,8 +350,8 @@ mod tests {
             f.retire(m);
             // the free block of 64 should have been merged back to the front
             // of the list as a single block.
-            assert_eq!(f.debug_chain(), vec![ 256 ]);
-            assert_eq!(f.debug_span_chain(), vec![ 256, 0 ]);
+            assert_chain(&f, &[ 256 ]);
+            assert_span_chain(&f, &[ 256, 0 ]);
             assert_eq!(f.first_available(), origin);
         }
     }
@@ -349,8 +365,8 @@ mod tests {
         let mut f = FreeList::new(m1);
         let origin = f.first_available();
         f.retire(m4);
-        assert_eq!(f.debug_chain(), vec![ 128, 64 ]);
-        assert_eq!(f.debug_span_chain(), vec![ 128, 64, 0 ]);
+        assert_chain(&f, &[ 128, 64 ]);
+        assert_span_chain(&f, &[ 128, 64, 0 ]);
         assert_eq!(f.first_available(), origin);
     }
 
@@ -363,12 +379,12 @@ mod tests {
         let mut f = FreeList::new(m1);
         let origin = f.first_available();
         f.retire(m4);
-        assert_eq!(f.debug_chain(), vec![ 128, 64 ]);
+        assert_chain(&f, &[ 128, 64 ]);
         assert_eq!(f.first_available(), origin);
 
         f.retire(m3);
-        assert_eq!(f.debug_chain(), vec![ 256 ]);
-        assert_eq!(f.debug_span_chain(), vec![ 256, 0 ]);
+        assert_chain(&f, &[ 256 ]);
+        assert_span_chain(&f, &[ 256, 0 ]);
         assert_eq!(f.first_available(), origin);
     }
 }

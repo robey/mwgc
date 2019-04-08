@@ -90,20 +90,25 @@ impl<'heap> ColorMap<'heap> {
     pub fn free_range(&mut self, range: BlockRange) {
         for i in (range.start)..(range.end) { self.set(i, Color::Check) }
     }
-}
 
-impl<'heap> fmt::Debug for ColorMap<'heap> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ColorMap(")?;
+    fn dump<W: fmt::Write>(&self, buffer: &mut W) -> fmt::Result {
+        write!(buffer, "ColorMap(")?;
         for i in 0..(self.bits.len() * 4) {
-            write!(f, "{}", match self.get(i) {
+            write!(buffer, "{}", match self.get(i) {
                 Color::Blue => "B",
                 Color::Green => "G",
                 Color::Check => "C",
                 Color::Continue => ".",
             })?;
         }
-        write!(f, ")")
+        write!(buffer, ")")
+    }
+
+}
+
+impl<'heap> fmt::Debug for ColorMap<'heap> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.dump(f)
     }
 }
 
@@ -112,25 +117,35 @@ impl<'heap> fmt::Debug for ColorMap<'heap> {
 mod tests {
     use super::{BlockRange, Color, ColorMap};
     use crate::memory::Memory;
+    use crate::string_buffer::StringBuffer;
+
+    fn debug<'a>(map: &ColorMap, buffer: &'a mut [u8]) -> &'a str {
+        let mut b = StringBuffer::new(buffer);
+        map.dump(&mut b).ok();
+        b.to_str()
+    }
 
     #[test]
     fn init() {
         let mut data: [u8; 4] = [0; 4];
         let map = ColorMap::new(Memory::new(&mut data));
-        assert_eq!(format!("{:?}", map), "ColorMap(CCCCCCCCCCCCCCCC)");
+
+        let mut buffer: [u8; 256] = [0; 256];
+        assert_eq!(debug(&map, &mut buffer), "ColorMap(CCCCCCCCCCCCCCCC)");
     }
 
     #[test]
     fn set_and_get_ranges() {
         let mut data: [u8; 4] = [0; 4];
+        let mut buffer: [u8; 256] = [0; 256];
         let mut map = ColorMap::new(Memory::new(&mut data));
         map.set_range(BlockRange { start: 0, end: 2, color: Color::Green });
-        assert_eq!(format!("{:?}", map), "ColorMap(G.CCCCCCCCCCCCCC)");
+        assert_eq!(debug(&map, &mut buffer), "ColorMap(G.CCCCCCCCCCCCCC)");
         assert_eq!(map.get_range(0), BlockRange { start: 0, end: 2, color: Color::Green });
 
         map.set_range(BlockRange { start: 2, end: 3, color: Color::Blue });
         assert_eq!(map.get_range(2), BlockRange { start: 2, end: 3, color: Color::Blue });
         assert_eq!(map.get_range(0), BlockRange { start: 0, end: 2, color: Color::Green });
-        assert_eq!(format!("{:?}", map), "ColorMap(G.BCCCCCCCCCCCCC)");
+        assert_eq!(debug(&map, &mut buffer), "ColorMap(G.BCCCCCCCCCCCCC)");
     }
 }
