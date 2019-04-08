@@ -497,7 +497,6 @@ impl<'heap> Heap<'heap> {
     }
 }
 
-#[cfg(test)]
 impl<'a> fmt::Debug for Heap<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Heap(pool={:?}, blocks={}x{}, ", self.start, self.blocks, BLOCK_SIZE_BYTES)?;
