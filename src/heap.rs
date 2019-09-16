@@ -229,11 +229,14 @@ impl<'heap> Heap<'heap> {
         (self.start as usize, self.end as usize)
     }
 
-    /// If this object allocated from within this heap, turn it into a real reference.
+    /// If this pointer refers to an object allocated from within this heap,
+    /// turn it into a real reference.
     pub fn safe_ref<T>(&self, ptr: *const T) -> Option<&'heap T> {
         if self.is_ptr_inside(ptr) { Some(unsafe { &*ptr }) } else { None }
     }
 
+    /// If this mutable pointer refers to an object allocated from within
+    /// this heap, turn it into a real mutable reference.
     pub fn safe_ref_mut<T>(&self, ptr: *mut T) -> Option<&'heap mut T> {
         if self.is_ptr_inside(ptr) { Some(unsafe { &mut *ptr }) } else { None }
     }
