@@ -222,10 +222,27 @@ impl<'heap> Heap<'heap> {
         self.color_map.get_range(self.block_of(p))
     }
 
+    /// For debugging or introspection, return the memory address of the
+    /// beginning and end of the "live" portion of the heap (the portion
+    /// that allocated objects come from).
+    pub fn get_live_range(&self) -> (usize, usize) {
+        (self.start as usize, self.end as usize)
+    }
+
+    /// If this object allocated from within this heap, turn it into a real reference.
+    pub fn safe_ref<T>(&self, ptr: *const T) -> Option<&'heap T> {
+        if self.is_ptr_inside(ptr) { Some(unsafe { &*ptr }) } else { None }
+    }
+
+    pub fn safe_ref_mut<T>(&self, ptr: *mut T) -> Option<&'heap mut T> {
+        if self.is_ptr_inside(ptr) { Some(unsafe { &mut *ptr }) } else { None }
+    }
+
     /// Was this object allocated from within this heap?
-    pub fn is_inside<T>(&self, obj: &T) -> bool {
-        let addr = obj as *const T as *const u8;
-        addr >= self.start && addr < self.end
+    pub fn is_ptr_inside<T>(&self, ptr: *const T) -> bool {
+        let start = ptr as usize;
+        let end = start + mem::size_of::<T>();
+        start >= (self.start as usize) && end <= (self.end as usize)
     }
 
     /// Request a `amount` bytes of memory. The size will be rounded up to
@@ -277,7 +294,14 @@ impl<'heap> Heap<'heap> {
     /// Given an object that was allocated on this heap, how many bytes were
     /// allocated to it?
     pub fn size_of<T>(&self, obj: &T) -> usize {
-        let range = self.get_range(obj as *const T as *const u8);
+        self.size_of_ptr(obj as *const T)
+    }
+
+    /// Given a pointer to an object that was allocated on this heap, how
+    /// many bytes are allocated to it?
+    pub fn size_of_ptr<T>(&self, obj: *const T) -> usize {
+        if !self.is_ptr_inside(obj) { return 0 }
+        let range = self.get_range(obj as *const u8);
         (self.address_of(range.end) as usize) - (self.address_of(range.start) as usize)
     }
 

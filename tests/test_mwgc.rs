@@ -263,3 +263,19 @@ fn api() {
     assert_eq!(stats2.total_bytes, 240);
     assert_eq!(stats2.free_bytes, 240 - 2 * mem::size_of::<Sample>());
 }
+
+#[test]
+fn safe_pointers() {
+    let h = Heap::new(Memory::new(unsafe { &mut DATA.data }));
+    let (start, end) = h.get_live_range();
+
+    assert_eq!(h.is_ptr_inside(start as *const usize), true);
+    assert_eq!(h.is_ptr_inside((start - 1) as *const usize), false);
+    assert_eq!(h.is_ptr_inside((end - mem::size_of::<usize>()) as *const usize), true);
+    assert_eq!(h.is_ptr_inside((end - mem::size_of::<usize>() + 1) as *const usize), false);
+
+    assert_eq!(h.safe_ref(start as *const usize).is_some(), true);
+    assert_eq!(h.safe_ref((start - 1) as *const usize).is_some(), false);
+    assert_eq!(h.safe_ref((end - mem::size_of::<usize>()) as *const usize).is_some(), true);
+    assert_eq!(h.safe_ref((end - mem::size_of::<usize>() + 1) as *const usize).is_some(), false);
+}
