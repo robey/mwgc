@@ -230,6 +230,25 @@ impl<'heap> Heap<'heap> {
     }
 
     /// If this pointer refers to an object allocated from within this heap,
+    /// return a u32 offset which can be used to identify it on 64-bit
+    /// systems where the heap will never exceed 4GB.
+    pub fn ref_to_offset<T>(&self, ptr: &T) -> Option<u32> {
+        if self.is_ptr_inside(ptr as *const T) {
+            Some(((ptr as *const T as usize) - (self.start as usize)) as u32)
+        } else {
+            None
+        }
+    }
+
+    pub fn offset_to_ref<T>(&self, offset: u32) -> Option<&'heap T> {
+        self.safe_ref(((self.start as usize) + (offset as usize)) as *const T)
+    }
+
+    pub fn offset_to_ref_mut<T>(&self, offset: u32) -> Option<&'heap mut T> {
+        self.safe_ref_mut(((self.start as usize) + (offset as usize)) as *mut T)
+    }
+
+    /// If this pointer refers to an object allocated from within this heap,
     /// turn it into a real reference.
     pub fn safe_ref<T>(&self, ptr: *const T) -> Option<&'heap T> {
         if self.is_ptr_inside(ptr) { Some(unsafe { &*ptr }) } else { None }
